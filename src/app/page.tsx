@@ -16,14 +16,14 @@ async function extractFramesFromFile(file: File, maxFrames: number = 20): Promis
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
-    video.crossOrigin = 'anonymous';
+    // Do NOT set crossOrigin — blob URLs don't support CORS and it causes errors on mobile
 
     const url = URL.createObjectURL(file);
     video.src = url;
 
     const cleanup = () => {
-      URL.revokeObjectURL(url);
-      video.remove();
+      try { URL.revokeObjectURL(url); } catch {}
+      try { video.remove(); } catch {}
     };
 
     video.onerror = () => {
@@ -43,9 +43,8 @@ async function extractFramesFromFile(file: File, maxFrames: number = 20): Promis
         const interval = duration / (frameCount + 1);
 
         const canvas = document.createElement('canvas');
-        // Higher resolution for better analysis accuracy
-        canvas.width = Math.min(video.videoWidth, 960);
-        canvas.height = Math.round((canvas.width / video.videoWidth) * video.videoHeight);
+        canvas.width = Math.min(video.videoWidth || 640, 960);
+        canvas.height = Math.round((canvas.width / (video.videoWidth || 640)) * (video.videoHeight || 480));
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas 初始化失敗');
 
@@ -54,26 +53,31 @@ async function extractFramesFromFile(file: File, maxFrames: number = 20): Promis
         for (let i = 1; i <= frameCount; i++) {
           const time = Math.min(i * interval, duration - 0.1);
 
-          // Seek to time
-          video.currentTime = time;
+          // Seek to time — wrapped in try-catch for mobile safety
+          try {
+            video.currentTime = time;
+          } catch (seekErr) {
+            console.warn(`[frame ${i}] seek failed:`, seekErr);
+            continue;
+          }
+
           await new Promise<void>((res) => {
+            const timer = setTimeout(res, 2000);
             const onSeeked = () => {
+              clearTimeout(timer);
               video.removeEventListener('seeked', onSeeked);
               res();
             };
             video.addEventListener('seeked', onSeeked);
-            // Timeout fallback
-            setTimeout(res, 2000);
           });
 
-          // Small delay for frame to render
           await new Promise((r) => setTimeout(r, 150));
 
-          // Capture
+          // Capture frame
           try {
             ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-            // Quick black frame check (sample center pixel)
+            // Quick black frame check
             const centerPixel = ctx.getImageData(
               Math.floor(canvas.width / 2),
               Math.floor(canvas.height / 2),
@@ -85,9 +89,8 @@ async function extractFramesFromFile(file: File, maxFrames: number = 20): Promis
               const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
               frames.push(dataUrl);
             }
-          } catch (e) {
-            console.warn('Frame capture failed at', time, e);
-            // Continue to next frame
+          } catch (captureErr) {
+            console.warn(`[frame ${i}] capture failed:`, captureErr);
           }
         }
 
@@ -142,13 +145,17 @@ export default function Home() {
       setStatusMessage('正在從影片擷取關鍵幀...');
       setStatusType('processing');
 
-      // Extract frames using a dedicated video element (avoids mobile DOM issues)
-      const frames = await extractFramesFromFile(videoFile, 20);
+      let frames: string[];
+      try {
+        frames = await extractFramesFromFile(videoFile, 20);
+      } catch (extractErr: any) {
+        throw new Error(`影格擷取失敗（${extractErr.message}）。請嘗試用 MP4 格式的影片。`);
+      }
 
       if (frames.length === 0) {
         throw new Error(
-          '無法從影片擷取畫面。請嘗試：\n' +
-          '1. 使用 MP4 格式的影片\n' +
+          '無法從影片擷取畫面（全為黑畫面）。請嘗試：\n' +
+          '1. 使用 MP4 H.264 格式的影片\n' +
           '2. 影片長度至少 1 秒以上'
         );
       }
