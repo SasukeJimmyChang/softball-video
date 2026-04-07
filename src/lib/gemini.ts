@@ -23,6 +23,7 @@ const MODEL_CANDIDATES = [
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
   'gemini-2.0-flash',
+  'gemini-2.5-pro',
 ];
 
 function buildParts(request: GeminiAnalysisRequest): any[] {
@@ -53,8 +54,8 @@ export async function analyzeWithGemini(request: GeminiAnalysisRequest): Promise
 
   // Try each model candidate
   for (const modelName of MODEL_CANDIDATES) {
-    // Retry up to 2 times per model (with delay for rate limits)
-    for (let attempt = 0; attempt < 2; attempt++) {
+    // Retry up to 3 times per model (with delay for rate limits / 503)
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const model = client.getGenerativeModel({ model: modelName });
         const result = await model.generateContent(parts);
@@ -68,21 +69,29 @@ export async function analyzeWithGemini(request: GeminiAnalysisRequest): Promise
         lastError = error;
         const errorMsg = error?.message || '';
 
-        // If quota exceeded / rate limited, wait and retry
+        // Rate limited or quota exceeded — wait and retry same model
         if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Too Many Requests')) {
           console.warn(`Model ${modelName} rate limited (attempt ${attempt + 1}), waiting...`);
           await sleep(attempt === 0 ? 5000 : 10000);
           continue;
         }
 
-        // If model not found or not available, try next model
+        // Service unavailable (503) — wait and retry, then try next model
+        if (errorMsg.includes('503') || errorMsg.includes('Service Unavailable') || errorMsg.includes('overloaded')) {
+          console.warn(`Model ${modelName} unavailable (attempt ${attempt + 1}), waiting...`);
+          await sleep(attempt === 0 ? 3000 : 8000);
+          continue;
+        }
+
+        // Model not found — skip to next model immediately
         if (errorMsg.includes('404') || errorMsg.includes('not found') || errorMsg.includes('not supported')) {
           console.warn(`Model ${modelName} not available, trying next...`);
           break;
         }
 
-        // Other errors: throw immediately
-        throw formatError(error);
+        // Other errors — try next model instead of throwing
+        console.warn(`Model ${modelName} error: ${errorMsg.slice(0, 100)}, trying next...`);
+        break;
       }
     }
   }
@@ -93,6 +102,12 @@ export async function analyzeWithGemini(request: GeminiAnalysisRequest): Promise
 
 function formatError(error: any): Error {
   const msg = error?.message || String(error);
+
+  if (msg.includes('503') || msg.includes('Service Unavailable') || msg.includes('overloaded')) {
+    return new Error(
+      'Gemini API 伺服器暫時忙碌中。這是 Google 端的問題，請等 1-2 分鐘後重試。'
+    );
+  }
 
   if (msg.includes('429') || msg.includes('quota') || msg.includes('Too Many Requests')) {
     return new Error(
