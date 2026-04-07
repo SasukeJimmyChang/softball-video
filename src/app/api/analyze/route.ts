@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeWithGemini } from '@/lib/gemini';
-import { buildAnalysisPrompt } from '@/lib/prompts';
-import { AnalysisMode, Handedness, AnalysisResultItem } from '@/types';
+import { buildAnalysisPrompt, buildDualPersonalityPrompt } from '@/lib/prompts';
+import { AnalysisMode, Handedness, AnalysisResultItem, DualPersonalityReport } from '@/types';
+
+function parseJsonFromResponse(text: string): any {
+  let jsonStr = text;
+  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (jsonMatch) {
+    jsonStr = jsonMatch[1].trim();
+  }
+  return JSON.parse(jsonStr);
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -11,6 +20,7 @@ export async function POST(request: NextRequest) {
       handedness,
       frames,
       images,
+      dualPersonality: enableDualPersonality,
     }: {
       mode: AnalysisMode;
       handedness: Handedness;
@@ -19,6 +29,7 @@ export async function POST(request: NextRequest) {
         landmarks: Array<{ x: number; y: number; z: number; visibility: number }>;
       }>;
       images: string[];
+      dualPersonality?: boolean;
     } = body;
 
     if (!mode || !handedness || !frames || !images) {
@@ -28,22 +39,16 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Standard analysis
     const prompt = buildAnalysisPrompt(mode, handedness, frames);
+    const responseText = await analyzeWithGemini({ prompt, images });
+    const parsed = parseJsonFromResponse(responseText);
 
-    const responseText = await analyzeWithGemini({
-      prompt,
-      images,
-    });
-
-    // Parse JSON from response (handle markdown code blocks)
-    let jsonStr = responseText;
-    const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      jsonStr = jsonMatch[1].trim();
-    }
-
-    const parsed = JSON.parse(jsonStr);
-    const result: { summary: string; items: AnalysisResultItem[] } = {
+    const result: {
+      summary: string;
+      items: AnalysisResultItem[];
+      dualPersonality?: DualPersonalityReport;
+    } = {
       summary: parsed.summary || '',
       items: (parsed.items || []).map((item: any) => ({
         id: item.id,
@@ -52,6 +57,46 @@ export async function POST(request: NextRequest) {
         comment: item.comment,
       })),
     };
+
+    // Dual personality analysis (separate API call)
+    if (enableDualPersonality) {
+      const dpPrompt = buildDualPersonalityPrompt(mode, handedness, frames);
+      const dpResponseText = await analyzeWithGemini({ prompt: dpPrompt, images });
+      const dpParsed = parseJsonFromResponse(dpResponseText);
+
+      result.dualPersonality = {
+        encouragingCoach: {
+          strengths: dpParsed.encouragingCoach?.strengths || [],
+          suggestedLineup: dpParsed.encouragingCoach?.suggestedLineup || '',
+          ratings: (dpParsed.encouragingCoach?.ratings || []).map((r: any) => ({
+            name: r.name || '選手',
+            power: r.power ?? r.reaction ?? 0,
+            accuracy: r.accuracy ?? r.gloveWork ?? 0,
+            stability: r.stability ?? 0,
+            coordination: r.coordination ?? r.throwing ?? 0,
+            aggression: r.aggression ?? r.footwork ?? 0,
+          })),
+          ...( dpParsed.encouragingCoach?.encouragement
+            ? { encouragement: dpParsed.encouragingCoach.encouragement }
+            : {}),
+        },
+        harshScout: {
+          weaknesses: dpParsed.harshScout?.weaknesses || [],
+          suggestedLineup: dpParsed.harshScout?.suggestedLineup || '',
+          ratings: (dpParsed.harshScout?.ratings || []).map((r: any) => ({
+            name: r.name || '選手',
+            power: r.power ?? r.reaction ?? 0,
+            accuracy: r.accuracy ?? r.gloveWork ?? 0,
+            stability: r.stability ?? 0,
+            coordination: r.coordination ?? r.throwing ?? 0,
+            aggression: r.aggression ?? r.footwork ?? 0,
+          })),
+          ...( dpParsed.harshScout?.roast
+            ? { roast: dpParsed.harshScout.roast }
+            : {}),
+        },
+      };
+    }
 
     return NextResponse.json(result);
   } catch (error: any) {

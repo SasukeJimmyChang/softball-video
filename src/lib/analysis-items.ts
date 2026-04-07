@@ -52,6 +52,30 @@ export const battingItems: AnalysisItem[] = [
   { id: 'T-06', name: '後腳跟離地', description: '後踝 Y 軸位移，髖部旋轉驅動確認', category: 'temporal' },
 ];
 
-export function getAnalysisItems(mode: 'pitching' | 'batting') {
-  return mode === 'pitching' ? pitchingItems : battingItems;
+export const fieldingItems: AnalysisItem[] = [
+  // Static items F-01 ~ F-14
+  { id: 'F-01', name: '預備姿勢', description: '雙腳與肩同寬微蹲，重心放前腳掌，手套觸地準備', category: 'static' },
+  { id: 'F-02', name: '手套位置', description: '手套應貼近地面張開，手套口朝球方向', category: 'static' },
+  { id: 'F-03', name: '接球手肘角度', description: '手肘微彎保持彈性，不應完全伸直鎖死', category: 'static' },
+  { id: 'F-04', name: '雙腳站距', description: '站距適中，過窄反應慢，過寬移動受限', category: 'static' },
+  { id: 'F-05', name: '膝蓋彎曲度', description: '膝蓋應充分彎曲降低重心，理想 90-130°', category: 'static' },
+  { id: 'F-06', name: '臀部高度', description: '臀部應低於肩膀，確保視線能追蹤滾地球', category: 'static' },
+  { id: 'F-07', name: '頭部穩定', description: '頭部保持正面朝球，視線不應偏移', category: 'static' },
+  { id: 'F-08', name: '裸手位置', description: '裸手應在手套上方準備蓋球，防止彈出', category: 'static' },
+  { id: 'F-09', name: '身體正面朝球', description: '軀幹應正對來球方向，不應側身接球', category: 'static' },
+  { id: 'F-10', name: '接球後收球動作', description: '接球後手套迅速收至腰部，準備傳球', category: 'static' },
+  { id: 'F-11', name: '傳球手臂角度', description: '傳球時肩-肘-腕夾角，過頭式傳球最準確', category: 'static' },
+  { id: 'F-12', name: '跨步傳球方向', description: '傳球腳步應踏向目標方向', category: 'static' },
+  { id: 'F-13', name: '重心轉移', description: '接球到傳球的重心由後腳轉移至前腳', category: 'static' },
+  { id: 'F-14', name: '腳步移動效率', description: '移動時碎步接近，不應交叉腳步', category: 'static' },
+  // Temporal items FT-01 ~ FT-03
+  { id: 'FT-01', name: '反應起動速度', description: '球離棒到第一步移動的時間差', category: 'temporal' },
+  { id: 'FT-02', name: '接傳球轉換速度', description: '手套接球到傳球出手的時間差', category: 'temporal' },
+  { id: 'FT-03', name: '腳步節奏連貫性', description: '移動-接球-傳球的整體節奏流暢度', category: 'temporal' },
+];
+
+export function getAnalysisItems(mode: 'pitching' | 'batting' | 'fielding') {
+  if (mode === 'pitching') return pitchingItems;
+  if (mode === 'batting') return battingItems;
+  return fieldingItems;
 }

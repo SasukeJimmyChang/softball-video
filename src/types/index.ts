@@ -1,4 +1,4 @@
-export type AnalysisMode = 'pitching' | 'batting';
+export type AnalysisMode = 'pitching' | 'batting' | 'fielding';
 export type Handedness = 'right' | 'left';
 export type StatusColor = 'red' | 'orange' | 'green' | 'blue';
 
@@ -16,11 +16,38 @@ export interface AnalysisResultItem {
   comment: string;
 }
 
+export interface DualPersonalityReport {
+  encouragingCoach: {
+    strengths: string[];
+    suggestedLineup: string;
+    ratings: PlayerRating[];
+  };
+  harshScout: {
+    weaknesses: string[];
+    suggestedLineup: string;
+    ratings: PlayerRating[];
+  };
+}
+
+export interface PlayerRating {
+  name: string;
+  power: number;      // 爆
+  accuracy: number;   // 準
+  stability: number;  // 穩
+  coordination: number; // 協
+  aggression: number; // 積極
+}
+
 export interface AnalysisResult {
   mode: AnalysisMode;
   handedness: Handedness;
   items: AnalysisResultItem[];
   summary: string;
+  dualPersonality?: DualPersonalityReport;
+}
+
+export interface AnalysisOptions {
+  dualPersonality: boolean;
 }
 
 export interface KeypointFrame {

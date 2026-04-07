@@ -1,23 +1,33 @@
 'use client';
 
-import { AnalysisMode, Handedness } from '@/types';
+import { AnalysisMode, Handedness, AnalysisOptions } from '@/types';
 
 interface AnalysisSettingsProps {
   mode: AnalysisMode;
   handedness: Handedness;
+  options: AnalysisOptions;
   onModeChange: (mode: AnalysisMode) => void;
   onHandednessChange: (h: Handedness) => void;
+  onOptionsChange: (options: AnalysisOptions) => void;
   onFileChange: (file: File) => void;
   isAnalyzing: boolean;
   onAnalyze: () => void;
   hasVideo: boolean;
 }
 
+function getHandLabel(mode: AnalysisMode, side: 'right' | 'left'): string {
+  if (mode === 'pitching') return side === 'right' ? '右投' : '左投';
+  if (mode === 'batting') return side === 'right' ? '右打' : '左打';
+  return side === 'right' ? '右手' : '左手';
+}
+
 export default function AnalysisSettings({
   mode,
   handedness,
+  options,
   onModeChange,
   onHandednessChange,
+  onOptionsChange,
   onFileChange,
   isAnalyzing,
   onAnalyze,
@@ -35,9 +45,9 @@ export default function AnalysisSettings({
         <div className="flex flex-col gap-2">
           <button
             onClick={() => onModeChange('pitching')}
-            className={`w-full py-3 rounded-lg font-bold text-white transition-colors ${
+            className={`w-full py-3 rounded-lg font-bold transition-colors ${
               mode === 'pitching'
-                ? 'bg-red-600 hover:bg-red-700'
+                ? 'bg-red-600 text-white hover:bg-red-700'
                 : 'bg-gray-200 text-gray-500 hover:bg-gray-300'
             }`}
           >
@@ -52,6 +62,16 @@ export default function AnalysisSettings({
             }`}
           >
             &#127951; 打擊分析
+          </button>
+          <button
+            onClick={() => onModeChange('fielding')}
+            className={`w-full py-3 rounded-lg font-bold transition-colors ${
+              mode === 'fielding'
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'bg-gray-200 text-gray-500 hover:bg-gray-300'
+            }`}
+          >
+            &#129342; 守備分析（滾地球）
           </button>
         </div>
       </div>
@@ -68,7 +88,7 @@ export default function AnalysisSettings({
                 : 'bg-gray-200 text-gray-500 hover:bg-gray-300'
             }`}
           >
-            {mode === 'pitching' ? '右投' : '右打'}
+            {getHandLabel(mode, 'right')}
           </button>
           <button
             onClick={() => onHandednessChange('left')}
@@ -78,8 +98,31 @@ export default function AnalysisSettings({
                 : 'bg-gray-200 text-gray-500 hover:bg-gray-300'
             }`}
           >
-            {mode === 'pitching' ? '左投' : '左打'}
+            {getHandLabel(mode, 'left')}
           </button>
+        </div>
+      </div>
+
+      {/* Optional Features */}
+      <div className="mb-4">
+        <label className="text-sm font-semibold text-gray-600 mb-2 block">進階功能</label>
+        <div className="space-y-2">
+          <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg cursor-pointer hover:bg-gray-100 transition-colors">
+            <input
+              type="checkbox"
+              checked={options.dualPersonality}
+              onChange={(e) =>
+                onOptionsChange({ ...options, dualPersonality: e.target.checked })
+              }
+              className="w-4 h-4 rounded accent-purple-600"
+            />
+            <div>
+              <span className="text-sm font-semibold">&#127917; 雙人格教練分析</span>
+              <p className="text-xs text-gray-500 mt-0.5">
+                鼓勵教練（溫馨版）+ 毒舌球探（殘酷版）
+              </p>
+            </div>
+          </label>
         </div>
       </div>
 
@@ -116,7 +159,7 @@ export default function AnalysisSettings({
       {/* Color Legend */}
       <div className="mt-4">
         <label className="text-sm font-semibold text-gray-600 mb-2 block">報告色碼</label>
-        <div className="flex gap-3 text-sm">
+        <div className="flex gap-3 text-sm flex-wrap">
           <span className="flex items-center gap-1">
             <span className="w-3 h-3 rounded bg-red-500 inline-block" /> 需改進
           </span>

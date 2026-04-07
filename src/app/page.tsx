@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback } from 'react';
-import { AnalysisMode, Handedness, AnalysisResultItem, Landmark } from '@/types';
+import { AnalysisMode, Handedness, AnalysisResultItem, AnalysisOptions, Landmark, DualPersonalityReport } from '@/types';
 import AnalysisSettings from '@/components/AnalysisSettings';
 import VideoPlayer, { VideoPlayerHandle } from '@/components/VideoPlayer';
 import AnalysisReport from '@/components/AnalysisReport';
@@ -10,6 +10,7 @@ import { initPoseLandmarker, extractKeyFrames, selectKeyFrames } from '@/lib/pos
 export default function Home() {
   const [mode, setMode] = useState<AnalysisMode>('pitching');
   const [handedness, setHandedness] = useState<Handedness>('right');
+  const [options, setOptions] = useState<AnalysisOptions>({ dualPersonality: false });
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [landmarks, setLandmarks] = useState<Landmark[] | null>(null);
@@ -17,6 +18,7 @@ export default function Home() {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [results, setResults] = useState<AnalysisResultItem[] | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
+  const [dualPersonality, setDualPersonality] = useState<DualPersonalityReport | null>(null);
   const [statusMessage, setStatusMessage] = useState<string>('AI 已就緒！請選擇模式並上傳影片。');
   const [statusType, setStatusType] = useState<'ready' | 'processing' | 'error'>('ready');
 
@@ -28,6 +30,7 @@ export default function Home() {
     setVideoUrl(url);
     setResults(null);
     setSummary(null);
+    setDualPersonality(null);
     setLandmarks(null);
     setStatusMessage('影片已載入！點擊「開始分析」進行 AI 分析。');
     setStatusType('ready');
@@ -41,6 +44,7 @@ export default function Home() {
       setIsAnalyzing(false);
       setResults(null);
       setSummary(null);
+      setDualPersonality(null);
       setStatusMessage('正在初始化 MediaPipe 骨架偵測...');
       setStatusType('processing');
 
@@ -75,7 +79,10 @@ export default function Home() {
 
       setIsProcessing(false);
       setIsAnalyzing(true);
-      setStatusMessage(`偵測到 ${frames.length} 幀骨架，正在送入 AI 分析...`);
+
+      const analysisParts = ['標準分析'];
+      if (options.dualPersonality) analysisParts.push('雙人格教練分析');
+      setStatusMessage(`偵測到 ${frames.length} 幀骨架，正在送入 AI 進行${analysisParts.join(' + ')}...`);
 
       // Select key frames for AI analysis (limit to 6 to control cost)
       const keyFrames = selectKeyFrames(frames, 6);
@@ -87,6 +94,7 @@ export default function Home() {
         body: JSON.stringify({
           mode,
           handedness,
+          dualPersonality: options.dualPersonality,
           frames: keyFrames.map((f) => ({
             timestamp: f.timestamp,
             landmarks: f.landmarks,
@@ -103,6 +111,9 @@ export default function Home() {
       const data = await response.json();
       setResults(data.items);
       setSummary(data.summary);
+      if (data.dualPersonality) {
+        setDualPersonality(data.dualPersonality);
+      }
       setStatusMessage('分析完成！請查看下方報告。');
       setStatusType('ready');
     } catch (error: any) {
@@ -113,7 +124,7 @@ export default function Home() {
       setIsProcessing(false);
       setIsAnalyzing(false);
     }
-  }, [videoFile, mode, handedness]);
+  }, [videoFile, mode, handedness, options]);
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-[#1a1a2e] to-[#16213e]">
@@ -131,7 +142,7 @@ export default function Home() {
       {/* Subtitle */}
       <div className="bg-[#1a1a2e] px-4 py-3 text-center">
         <p className="text-gray-300 text-sm">
-          AI 姿勢辨識輔助工具 · 投球／打擊各 18 項靜態 + 3 項時序分析 · 結果僅供參考
+          AI 姿勢辨識輔助工具 · 投球／打擊／守備分析 · 結果僅供參考
         </p>
       </div>
 
@@ -160,8 +171,10 @@ export default function Home() {
           <AnalysisSettings
             mode={mode}
             handedness={handedness}
+            options={options}
             onModeChange={setMode}
             onHandednessChange={setHandedness}
+            onOptionsChange={setOptions}
             onFileChange={handleFileChange}
             isAnalyzing={isProcessing || isAnalyzing}
             onAnalyze={handleAnalyze}
@@ -181,6 +194,7 @@ export default function Home() {
             results={results}
             isAnalyzing={isAnalyzing}
             summary={summary}
+            dualPersonality={dualPersonality}
           />
         </div>
       </div>
