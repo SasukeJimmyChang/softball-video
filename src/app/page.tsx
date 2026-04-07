@@ -7,25 +7,8 @@ import VideoPlayer, { VideoPlayerHandle } from '@/components/VideoPlayer';
 import AnalysisReport from '@/components/AnalysisReport';
 
 /**
- * Extract frames from video using FileReader + offscreen approach.
- * If that fails, fallback to reading the file as base64 for direct API use.
+ * Read a file as base64 data URL.
  */
-async function extractFrames(file: File, maxFrames: number = 20): Promise<string[]> {
-  // Method 1: Try using an offscreen video + canvas
-  try {
-    const frames = await extractWithCanvas(file, maxFrames);
-    if (frames.length > 0) return frames;
-  } catch (e) {
-    console.warn('Canvas extraction failed, trying fallback:', e);
-  }
-
-  // Method 2: Fallback — read video as base64 and let Gemini handle it directly
-  // (only works for files under ~20MB due to inline data limits)
-  console.log('Using direct video upload fallback');
-  const base64 = await readFileAsBase64(file);
-  return [base64]; // Single "frame" that is actually the whole video
-}
-
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -35,83 +18,61 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
-function extractWithCanvas(file: File, maxFrames: number): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const video = document.createElement('video');
-    video.muted = true;
-    video.playsInline = true;
-    video.preload = 'auto';
-    video.setAttribute('playsinline', '');
-    video.setAttribute('webkit-playsinline', '');
+/**
+ * Capture frames from the page's video element (already loaded and visible).
+ */
+function captureFromDomVideo(
+  videoEl: HTMLVideoElement,
+  maxFrames: number
+): Promise<string[]> {
+  return new Promise(async (resolve) => {
+    const frames: string[] = [];
+    const duration = videoEl.duration;
 
-    const url = URL.createObjectURL(file);
-    video.src = url;
+    if (!duration || !isFinite(duration) || duration <= 0) {
+      resolve([]);
+      return;
+    }
 
-    const cleanup = () => {
-      try { URL.revokeObjectURL(url); } catch {}
-    };
+    const count = Math.min(maxFrames, Math.max(6, Math.ceil(duration * 5)));
+    const interval = duration / (count + 1);
+    const w = Math.min(videoEl.videoWidth || 640, 960);
+    const h = Math.round(w * ((videoEl.videoHeight || 480) / (videoEl.videoWidth || 640)));
 
-    const timeoutId = setTimeout(() => {
-      cleanup();
-      reject(new Error('影片載入逾時'));
-    }, 15000);
+    let canvas: HTMLCanvasElement;
+    let ctx: CanvasRenderingContext2D | null;
+    try {
+      canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      ctx = canvas.getContext('2d');
+    } catch {
+      resolve([]);
+      return;
+    }
+    if (!ctx) { resolve([]); return; }
 
-    video.onerror = () => {
-      clearTimeout(timeoutId);
-      cleanup();
-      reject(new Error('影片格式不支援'));
-    };
-
-    video.onloadeddata = async () => {
-      clearTimeout(timeoutId);
+    for (let i = 1; i <= count; i++) {
       try {
-        const duration = video.duration;
-        if (!duration || !isFinite(duration) || duration <= 0) {
-          throw new Error('無法取得影片長度');
+        const t = Math.min(i * interval, duration - 0.05);
+        videoEl.currentTime = t;
+
+        await new Promise<void>((res) => {
+          const timer = setTimeout(res, 2500);
+          videoEl.addEventListener('seeked', () => { clearTimeout(timer); res(); }, { once: true });
+        });
+        await new Promise((r) => setTimeout(r, 120));
+
+        ctx.drawImage(videoEl, 0, 0, w, h);
+        const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
+        if (px[0] + px[1] + px[2] > 15) {
+          frames.push(canvas.toDataURL('image/jpeg', 0.7));
         }
-
-        const frameCount = Math.min(maxFrames, Math.ceil(duration * 10));
-        const interval = duration / (frameCount + 1);
-
-        const w = Math.min(video.videoWidth || 640, 960);
-        const h = Math.round((w / (video.videoWidth || 640)) * (video.videoHeight || 480));
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('Canvas 不可用');
-
-        const frames: string[] = [];
-
-        for (let i = 1; i <= frameCount; i++) {
-          const time = Math.min(i * interval, duration - 0.05);
-
-          try { video.currentTime = time; } catch { continue; }
-
-          // Wait for seeked with timeout
-          await new Promise<void>((res) => {
-            const t = setTimeout(res, 2000);
-            video.addEventListener('seeked', () => { clearTimeout(t); res(); }, { once: true });
-          });
-          await new Promise((r) => setTimeout(r, 100));
-
-          try {
-            ctx.drawImage(video, 0, 0, w, h);
-            // Sample a few pixels to check if frame is blank
-            const d = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
-            if (d[0] + d[1] + d[2] > 15) {
-              frames.push(canvas.toDataURL('image/jpeg', 0.7));
-            }
-          } catch { /* skip frame */ }
-        }
-
-        cleanup();
-        resolve(frames);
-      } catch (e) {
-        cleanup();
-        reject(e);
+      } catch {
+        // skip frame
       }
-    };
+    }
+    resolve(frames);
   });
 }
 
@@ -134,48 +95,73 @@ export default function Home() {
 
   const handleFileChange = useCallback((file: File) => {
     setVideoFile(file);
-    const url = URL.createObjectURL(file);
-    setVideoUrl(url);
+    try {
+      const url = URL.createObjectURL(file);
+      setVideoUrl(url);
+    } catch {
+      setVideoUrl(null);
+    }
     setResults(null);
     setSummary(null);
     setDualPersonality(null);
     setLandmarks(null);
-    setStatusMessage('影片已載入！點擊「開始分析」進行 AI 分析。');
+    setStatusMessage('影片已載入！建議先播放幾秒再點「開始分析」。');
     setStatusType('ready');
   }, []);
 
   const handleAnalyze = useCallback(async () => {
     if (!videoFile) return;
 
+    setIsProcessing(true);
+    setIsAnalyzing(false);
+    setResults(null);
+    setSummary(null);
+    setDualPersonality(null);
+    setStatusType('processing');
+
+    let images: string[] = [];
+
+    // Step 1: Try frame extraction from DOM video
     try {
-      setIsProcessing(true);
-      setIsAnalyzing(false);
-      setResults(null);
-      setSummary(null);
-      setDualPersonality(null);
-      setStatusMessage('正在從影片擷取關鍵幀...');
-      setStatusType('processing');
-
-      const frames = await extractFrames(videoFile, 20);
-
-      if (frames.length === 0) {
-        throw new Error('無法從影片擷取畫面。請使用 MP4 格式的影片。');
+      setStatusMessage('步驟 1/3：從影片擷取關鍵幀...');
+      const videoEl = videoPlayerRef.current?.getVideoElement();
+      if (videoEl && videoEl.readyState >= 2) {
+        images = await captureFromDomVideo(videoEl, 20);
       }
+    } catch (e) {
+      console.warn('DOM video capture failed:', e);
+    }
 
+    // Step 2: If no frames, try reading file as base64 (direct video to Gemini)
+    if (images.length === 0) {
+      try {
+        setStatusMessage('步驟 1/3：改用影片直傳模式...');
+        const base64 = await readFileAsBase64(videoFile);
+        images = [base64];
+      } catch (e) {
+        console.warn('File read failed:', e);
+        setStatusMessage('錯誤：無法讀取影片檔案。請重新選擇影片。');
+        setStatusType('error');
+        setIsProcessing(false);
+        return;
+      }
+    }
+
+    // Step 3: Send to AI
+    try {
       setIsProcessing(false);
       setIsAnalyzing(true);
 
-      const isVideoFallback = frames.length === 1 && frames[0].startsWith('data:video');
+      const isVideo = images.length === 1 && images[0].startsWith('data:video');
       const analysisParts = ['標準分析'];
       if (options.dualPersonality) analysisParts.push('雙人格教練分析');
 
-      if (isVideoFallback) {
-        setStatusMessage(`改用影片直傳模式，正在送入 AI 進行${analysisParts.join(' + ')}...（約 10-30 秒）`);
-      } else {
-        setStatusMessage(`已擷取 ${frames.length} 幀，正在送入 AI 進行${analysisParts.join(' + ')}...（約 10-30 秒）`);
-      }
+      setStatusMessage(
+        isVideo
+          ? `步驟 2/3：影片直傳 AI 分析中...（約 15-40 秒）`
+          : `步驟 2/3：${images.length} 幀送入 AI 分析中...（約 10-30 秒）`
+      );
 
-      // Call analysis API
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,13 +169,13 @@ export default function Home() {
           mode,
           handedness,
           dualPersonality: options.dualPersonality,
-          images: frames,
+          images,
         }),
       });
 
       if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'API request failed');
+        const err = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+        throw new Error(err.error || `伺服器錯誤 ${response.status}`);
       }
 
       const data = await response.json();
@@ -198,10 +184,10 @@ export default function Home() {
       if (data.dualPersonality) {
         setDualPersonality(data.dualPersonality);
       }
-      setStatusMessage('分析完成！請查看下方報告。');
+      setStatusMessage('步驟 3/3：分析完成！請查看下方報告。');
       setStatusType('ready');
     } catch (error: any) {
-      console.error('Analysis error:', error);
+      console.error('API error:', error);
       setStatusMessage(`錯誤：${error.message}`);
       setStatusType('error');
     } finally {
