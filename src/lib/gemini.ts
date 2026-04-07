@@ -18,11 +18,11 @@ export interface GeminiAnalysisRequest {
   images: string[]; // base64 data URLs
 }
 
-// Models to try in order of preference
+// Models to try in order of preference (April 2026: 2.0/1.5 deprecated)
 const MODEL_CANDIDATES = [
+  'gemini-2.5-flash',
+  'gemini-2.5-flash-lite',
   'gemini-2.0-flash',
-  'gemini-1.5-flash',
-  'gemini-1.5-flash-latest',
 ];
 
 function buildParts(request: GeminiAnalysisRequest): any[] {
