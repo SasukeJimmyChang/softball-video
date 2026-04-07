@@ -42,7 +42,7 @@ function captureWithSeek(
         ctx.drawImage(videoEl, 0, 0, w, h);
         const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
         if (px[0] + px[1] + px[2] > 15) {
-          frames.push(canvas.toDataURL('image/jpeg', 0.5));
+          frames.push(canvas.toDataURL('image/jpeg', 0.75));
         }
       } catch { break; } // If seek throws, stop and let Method B handle it
     }
@@ -84,7 +84,7 @@ function captureWithPlay(
           ctx.drawImage(videoEl, 0, 0, w, h);
           const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
           if (px[0] + px[1] + px[2] > 15) {
-            frames.push(canvas.toDataURL('image/jpeg', 0.5));
+            frames.push(canvas.toDataURL('image/jpeg', 0.75));
           }
         } catch { /* skip */ }
         nextCaptureTime += captureInterval;
@@ -125,7 +125,8 @@ function captureFromDomVideo(
       return;
     }
 
-    const w = Math.min(videoEl.videoWidth || 640, 480);
+    // 720px gives good detail for biomechanics analysis while keeping file size manageable
+    const w = Math.min(videoEl.videoWidth || 640, 720);
     const h = Math.round(w * ((videoEl.videoHeight || 480) / (videoEl.videoWidth || 640)));
 
     let canvas: HTMLCanvasElement;
@@ -205,7 +206,8 @@ export default function Home() {
       setStatusMessage('步驟 1/3：從影片擷取關鍵幀...（請確認影片有先播放過）');
       const videoEl = videoPlayerRef.current?.getVideoElement();
       if (videoEl && videoEl.readyState >= 1) {
-        images = await captureFromDomVideo(videoEl, 12);
+        // 8 frames × 720px × 0.75 quality ≈ 1MB total (under Vercel 4.5MB limit)
+        images = await captureFromDomVideo(videoEl, 8);
       }
     } catch (e) {
       console.warn('DOM video capture failed:', e);
