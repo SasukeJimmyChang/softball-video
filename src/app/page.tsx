@@ -19,23 +19,112 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 /**
- * Capture frames from the page's video element (already loaded and visible).
+ * Method A: Seek-based capture (works on desktop, may fail on iOS)
+ */
+function captureWithSeek(
+  videoEl: HTMLVideoElement, canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D, w: number, h: number, maxFrames: number
+): Promise<string[]> {
+  return new Promise(async (resolve) => {
+    const frames: string[] = [];
+    const duration = videoEl.duration;
+    const count = Math.min(maxFrames, Math.max(6, Math.ceil(duration * 5)));
+    const interval = duration / (count + 1);
+
+    for (let i = 1; i <= count; i++) {
+      try {
+        videoEl.currentTime = Math.min(i * interval, duration - 0.05);
+        await new Promise<void>((res) => {
+          const t = setTimeout(res, 2500);
+          videoEl.addEventListener('seeked', () => { clearTimeout(t); res(); }, { once: true });
+        });
+        await new Promise((r) => setTimeout(r, 120));
+        ctx.drawImage(videoEl, 0, 0, w, h);
+        const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
+        if (px[0] + px[1] + px[2] > 15) {
+          frames.push(canvas.toDataURL('image/jpeg', 0.7));
+        }
+      } catch { break; } // If seek throws, stop and let Method B handle it
+    }
+    resolve(frames);
+  });
+}
+
+/**
+ * Method B: Play-based capture (works on iOS — no seeking required)
+ * Plays the video and captures frames at intervals using requestAnimationFrame.
+ */
+function captureWithPlay(
+  videoEl: HTMLVideoElement, canvas: HTMLCanvasElement,
+  ctx: CanvasRenderingContext2D, w: number, h: number, maxFrames: number
+): Promise<string[]> {
+  return new Promise((resolve) => {
+    const frames: string[] = [];
+    const duration = videoEl.duration;
+    const captureInterval = duration / (maxFrames + 1);
+    let nextCaptureTime = captureInterval;
+    let rafId: number;
+
+    const wasMuted = videoEl.muted;
+    const wasCurrentTime = videoEl.currentTime;
+    videoEl.muted = true;
+    videoEl.currentTime = 0;
+
+    const capture = () => {
+      if (videoEl.paused || videoEl.ended || frames.length >= maxFrames) {
+        videoEl.pause();
+        videoEl.muted = wasMuted;
+        cancelAnimationFrame(rafId);
+        resolve(frames);
+        return;
+      }
+
+      if (videoEl.currentTime >= nextCaptureTime) {
+        try {
+          ctx.drawImage(videoEl, 0, 0, w, h);
+          const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
+          if (px[0] + px[1] + px[2] > 15) {
+            frames.push(canvas.toDataURL('image/jpeg', 0.7));
+          }
+        } catch { /* skip */ }
+        nextCaptureTime += captureInterval;
+      }
+
+      rafId = requestAnimationFrame(capture);
+    };
+
+    // Start playing
+    videoEl.play().then(() => {
+      rafId = requestAnimationFrame(capture);
+    }).catch(() => {
+      resolve(frames); // play() failed
+    });
+
+    // Safety timeout
+    setTimeout(() => {
+      videoEl.pause();
+      videoEl.muted = wasMuted;
+      cancelAnimationFrame(rafId);
+      resolve(frames);
+    }, Math.min(duration * 1000 + 2000, 30000));
+  });
+}
+
+/**
+ * Capture frames from the page's video element.
+ * Tries seek-based first, falls back to play-based for iOS.
  */
 function captureFromDomVideo(
   videoEl: HTMLVideoElement,
   maxFrames: number
 ): Promise<string[]> {
   return new Promise(async (resolve) => {
-    const frames: string[] = [];
     const duration = videoEl.duration;
-
     if (!duration || !isFinite(duration) || duration <= 0) {
       resolve([]);
       return;
     }
 
-    const count = Math.min(maxFrames, Math.max(6, Math.ceil(duration * 5)));
-    const interval = duration / (count + 1);
     const w = Math.min(videoEl.videoWidth || 640, 960);
     const h = Math.round(w * ((videoEl.videoHeight || 480) / (videoEl.videoWidth || 640)));
 
@@ -52,26 +141,16 @@ function captureFromDomVideo(
     }
     if (!ctx) { resolve([]); return; }
 
-    for (let i = 1; i <= count; i++) {
-      try {
-        const t = Math.min(i * interval, duration - 0.05);
-        videoEl.currentTime = t;
-
-        await new Promise<void>((res) => {
-          const timer = setTimeout(res, 2500);
-          videoEl.addEventListener('seeked', () => { clearTimeout(timer); res(); }, { once: true });
-        });
-        await new Promise((r) => setTimeout(r, 120));
-
-        ctx.drawImage(videoEl, 0, 0, w, h);
-        const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
-        if (px[0] + px[1] + px[2] > 15) {
-          frames.push(canvas.toDataURL('image/jpeg', 0.7));
-        }
-      } catch {
-        // skip frame
-      }
+    // Try Method A: seek-based (fast, precise)
+    let frames = await captureWithSeek(videoEl, canvas, ctx, w, h, maxFrames);
+    if (frames.length >= 3) {
+      resolve(frames);
+      return;
     }
+
+    // Method A failed/insufficient — Try Method B: play-based (iOS compatible)
+    console.log('Seek-based capture failed, trying play-based capture...');
+    frames = await captureWithPlay(videoEl, canvas, ctx, w, h, maxFrames);
     resolve(frames);
   });
 }
@@ -123,24 +202,36 @@ export default function Home() {
 
     // Step 1: Try frame extraction from DOM video
     try {
-      setStatusMessage('步驟 1/3：從影片擷取關鍵幀...');
+      setStatusMessage('步驟 1/3：從影片擷取關鍵幀...（請確認影片有先播放過）');
       const videoEl = videoPlayerRef.current?.getVideoElement();
-      if (videoEl && videoEl.readyState >= 2) {
+      if (videoEl && videoEl.readyState >= 1) {
         images = await captureFromDomVideo(videoEl, 20);
       }
     } catch (e) {
       console.warn('DOM video capture failed:', e);
     }
 
-    // Step 2: If no frames, try reading file as base64 (direct video to Gemini)
+    // Step 2: If no frames, try direct video upload (only for small files)
     if (images.length === 0) {
-      try {
-        setStatusMessage('步驟 1/3：改用影片直傳模式...');
-        const base64 = await readFileAsBase64(videoFile);
-        images = [base64];
-      } catch (e) {
-        console.warn('File read failed:', e);
-        setStatusMessage('錯誤：無法讀取影片檔案。請重新選擇影片。');
+      const fileSizeMB = videoFile.size / (1024 * 1024);
+      if (fileSizeMB <= 3.5) {
+        // Small enough to send as base64 through Vercel
+        try {
+          setStatusMessage('步驟 1/3：改用影片直傳模式...');
+          const base64 = await readFileAsBase64(videoFile);
+          images = [base64];
+        } catch {
+          // fall through to error
+        }
+      }
+
+      if (images.length === 0) {
+        setStatusMessage(
+          '錯誤：無法擷取影片畫面。請嘗試：\n' +
+          '1. 上傳影片後先播放幾秒再點分析\n' +
+          '2. 使用較短的影片（10 秒以內）\n' +
+          '3. 使用 MP4 格式'
+        );
         setStatusType('error');
         setIsProcessing(false);
         return;
