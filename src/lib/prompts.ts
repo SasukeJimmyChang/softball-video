@@ -30,13 +30,15 @@ function getItemCount(mode: AnalysisMode): string {
   return '18 項靜態 + 3 項時序';
 }
 
-function formatLandmarks(
-  landmarksData: Array<{ timestamp: number; landmarks: Array<{ x: number; y: number; z: number; visibility: number }> }>
-): string {
+type FrameInput = { timestamp: number; landmarks: Array<{ x: number; y: number; z: number; visibility: number }> | null };
+
+function formatLandmarks(frames: FrameInput[]): string | null {
+  const withLandmarks = frames.filter((f) => f.landmarks && f.landmarks.length > 0);
+  if (withLandmarks.length === 0) return null;
   return JSON.stringify(
-    landmarksData.map((f) => ({
+    withLandmarks.map((f) => ({
       t: Math.round(f.timestamp * 100) / 100,
-      lm: f.landmarks.map((l) => ({
+      lm: f.landmarks!.map((l) => ({
         x: Math.round(l.x * 1000) / 1000,
         y: Math.round(l.y * 1000) / 1000,
         z: Math.round(l.z * 1000) / 1000,
@@ -49,7 +51,7 @@ function formatLandmarks(
 export function buildAnalysisPrompt(
   mode: AnalysisMode,
   handedness: Handedness,
-  landmarksData: Array<{ timestamp: number; landmarks: Array<{ x: number; y: number; z: number; visibility: number }> }>
+  landmarksData: FrameInput[]
 ): string {
   const modeLabel = getModeLabel(mode);
   const handLabel = getHandLabel(mode, handedness);
@@ -57,11 +59,13 @@ export function buildAnalysisPrompt(
   const landmarksJson = formatLandmarks(landmarksData);
   const totalItems = mode === 'fielding' ? '17' : '21';
 
-  return `你是一位專業的棒壘球${modeLabel}動作分析教練 AI。
-請根據提供的影格圖片和 MediaPipe Pose 骨架關鍵點座標，分析這位${handLabel}選手的${modeLabel}動作。
+  const landmarksSection = landmarksJson
+    ? `\n## 骨架關鍵點座標（MediaPipe 33 landmarks，每幀）\n${landmarksJson}\n`
+    : '';
 
-## 骨架關鍵點座標（MediaPipe 33 landmarks，每幀）
-${landmarksJson}
+  return `你是一位專業的棒壘球${modeLabel}動作分析教練 AI。
+請根據提供的影格圖片${landmarksJson ? '和骨架關鍵點座標' : ''}，分析這位${handLabel}選手的${modeLabel}動作。
+${landmarksSection}
 
 ## 分析項目（共 ${getItemCount(mode)}）
 ${itemsDesc}
@@ -99,7 +103,7 @@ ${itemsDesc}
 export function buildDualPersonalityPrompt(
   mode: AnalysisMode,
   handedness: Handedness,
-  landmarksData: Array<{ timestamp: number; landmarks: Array<{ x: number; y: number; z: number; visibility: number }> }>
+  landmarksData: FrameInput[]
 ): string {
   const modeLabel = getModeLabel(mode);
   const handLabel = getHandLabel(mode, handedness);
@@ -119,11 +123,9 @@ export function buildDualPersonalityPrompt(
 - 模式：${modeLabel}
 - 慣用手：${handLabel}
 
-## 骨架關鍵點座標（MediaPipe 33 landmarks，每幀）
-${landmarksJson}
-
+${landmarksJson ? `## 骨架關鍵點座標（MediaPipe 33 landmarks，每幀）\n${landmarksJson}\n` : ''}
 ## 分析要求
-請根據影格圖片和骨架數據，進行雙人格分析。
+請根據影格圖片${landmarksJson ? '和骨架數據' : ''}，進行雙人格分析。
 
 ### 數據過濾
 - 測速槍數值若超過 150 請視為 Bug 忽略

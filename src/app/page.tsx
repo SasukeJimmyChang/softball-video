@@ -45,53 +45,69 @@ export default function Home() {
       setResults(null);
       setSummary(null);
       setDualPersonality(null);
-      setStatusMessage('正在載入骨架偵測模型（首次可能需要 10-20 秒）...');
+      setStatusMessage('正在載入分析模型...');
       setStatusType('processing');
 
-      // Initialize MediaPipe with timeout
-      const initTimeout = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('骨架偵測模型載入逾時，請重新整理頁面再試')), 60000)
-      );
-      await Promise.race([initPoseLandmarker(), initTimeout]);
+      // Initialize MediaPipe (optional — analysis works without it)
+      let poseAvailable = false;
+      try {
+        const initResult = await Promise.race([
+          initPoseLandmarker(),
+          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30000)),
+        ]);
+        poseAvailable = initResult === true;
+      } catch {
+        poseAvailable = false;
+      }
+
+      if (poseAvailable) {
+        setStatusMessage('骨架偵測模型就緒，正在擷取影格...');
+      } else {
+        setStatusMessage('骨架偵測不可用，改用純圖片 AI 分析模式...');
+      }
 
       const videoEl = videoPlayerRef.current.getVideoElement();
       if (!videoEl) throw new Error('Video element not found');
 
       // Wait for video metadata with timeout
       if (videoEl.readyState < 1) {
-        const metaTimeout = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('影片載入逾時')), 15000)
-        );
         await Promise.race([
           new Promise<void>((resolve) => {
             videoEl.onloadedmetadata = () => resolve();
           }),
-          metaTimeout,
+          new Promise<void>((resolve) => setTimeout(resolve, 15000)),
         ]);
       }
 
-      setStatusMessage('正在擷取影格並偵測骨架...');
+      if (!videoEl.duration || !isFinite(videoEl.duration)) {
+        throw new Error('無法讀取影片，請換一個影片檔案再試');
+      }
 
-      // Extract frames with pose detection (max 30 frames for mobile performance)
+      setStatusMessage('正在擷取影格...');
+
+      // Extract frames (pose detection is optional bonus)
       const frames = await extractKeyFrames(
         videoEl,
         (frame, index, total) => {
-          setLandmarks(frame.landmarks);
-          setStatusMessage(`骨架偵測中... ${index + 1}/${total} 幀`);
+          if (frame.landmarks) setLandmarks(frame.landmarks);
+          setStatusMessage(`擷取影格中... ${index + 1}/${total}`);
         },
-        30
+        20,
+        poseAvailable
       );
 
       if (frames.length === 0) {
-        throw new Error('無法偵測到骨架，請確認影片中有人物');
+        throw new Error('無法擷取影格，請確認影片格式正確');
       }
 
       setIsProcessing(false);
       setIsAnalyzing(true);
 
+      const poseFrames = frames.filter((f) => f.landmarks).length;
       const analysisParts = ['標準分析'];
       if (options.dualPersonality) analysisParts.push('雙人格教練分析');
-      setStatusMessage(`偵測到 ${frames.length} 幀骨架，正在送入 AI 進行${analysisParts.join(' + ')}...`);
+      const poseInfo = poseFrames > 0 ? `（含 ${poseFrames} 幀骨架數據）` : '（純圖片模式）';
+      setStatusMessage(`擷取 ${frames.length} 幀${poseInfo}，正在送入 AI 進行${analysisParts.join(' + ')}...`);
 
       // Select key frames for AI analysis (limit to 6 to control cost)
       const keyFrames = selectKeyFrames(frames, 6);

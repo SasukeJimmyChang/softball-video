@@ -1,11 +1,11 @@
 import { Landmark } from '@/types';
 
 let poseLandmarker: any = null;
-let isInitializing = false;
+let initFailed = false;
 
-export async function initPoseLandmarker(): Promise<void> {
-  if (poseLandmarker || isInitializing) return;
-  isInitializing = true;
+export async function initPoseLandmarker(): Promise<boolean> {
+  if (poseLandmarker) return true;
+  if (initFailed) return false;
 
   try {
     const vision = await import('@mediapipe/tasks-vision');
@@ -15,10 +15,9 @@ export async function initPoseLandmarker(): Promise<void> {
       'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
     );
 
-    // Try GPU first, fallback to CPU (mobile Safari often fails with GPU)
-    let landmarker: any = null;
+    // Try GPU first, fallback to CPU
     try {
-      landmarker = await PoseLandmarker.createFromOptions(filesetResolver, {
+      poseLandmarker = await PoseLandmarker.createFromOptions(filesetResolver, {
         baseOptions: {
           modelAssetPath:
             'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
@@ -28,8 +27,8 @@ export async function initPoseLandmarker(): Promise<void> {
         numPoses: 1,
       });
     } catch {
-      console.warn('GPU delegate failed, falling back to CPU');
-      landmarker = await PoseLandmarker.createFromOptions(filesetResolver, {
+      console.warn('GPU delegate failed, trying CPU...');
+      poseLandmarker = await PoseLandmarker.createFromOptions(filesetResolver, {
         baseOptions: {
           modelAssetPath:
             'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
@@ -39,13 +38,11 @@ export async function initPoseLandmarker(): Promise<void> {
         numPoses: 1,
       });
     }
-
-    poseLandmarker = landmarker;
+    return true;
   } catch (error) {
-    console.error('Failed to initialize PoseLandmarker:', error);
-    throw new Error('骨架偵測模型載入失敗，請重新整理頁面再試');
-  } finally {
-    isInitializing = false;
+    console.warn('MediaPipe initialization failed, will use image-only mode:', error);
+    initFailed = true;
+    return false;
   }
 }
 
@@ -66,30 +63,24 @@ export function detectPose(
       }));
     }
   } catch (error) {
-    console.error('Pose detection error:', error);
+    console.warn('Pose detection error:', error);
   }
   return null;
 }
 
-export function isReady(): boolean {
-  return poseLandmarker !== null;
-}
-
 export interface FrameData {
   timestamp: number;
-  landmarks: Landmark[];
+  landmarks: Landmark[] | null; // null when MediaPipe unavailable
   imageBase64: string;
 }
 
 /**
- * Wait for video to seek to a specific time.
- * Mobile Safari's onseeked is unreliable, so we use a polling fallback with timeout.
+ * Wait for video to seek with timeout fallback for mobile browsers.
  */
 function waitForSeek(video: HTMLVideoElement, targetTime: number): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
+  return new Promise<void>((resolve) => {
     const timeout = setTimeout(() => {
       cleanup();
-      // On timeout, resolve anyway — the frame might be close enough
       resolve();
     }, 3000);
 
@@ -106,7 +97,6 @@ function waitForSeek(video: HTMLVideoElement, targetTime: number): Promise<void>
     video.addEventListener('seeked', onSeeked, { once: true });
     video.currentTime = targetTime;
 
-    // If already at the target time, resolve immediately
     if (Math.abs(video.currentTime - targetTime) < 0.05) {
       cleanup();
       resolve();
@@ -115,13 +105,14 @@ function waitForSeek(video: HTMLVideoElement, targetTime: number): Promise<void>
 }
 
 /**
- * Process video frames and extract pose landmarks + frame images.
- * Uses adaptive frame interval based on video duration.
+ * Extract video frames with optional pose detection.
+ * Always captures frame images — pose landmarks are a bonus when MediaPipe works.
  */
 export async function extractKeyFrames(
   videoElement: HTMLVideoElement,
   onProgress?: (frame: FrameData, index: number, total: number) => void,
-  maxFrames: number = 30
+  maxFrames: number = 20,
+  usePoseDetection: boolean = true
 ): Promise<FrameData[]> {
   const frames: FrameData[] = [];
   const duration = videoElement.duration;
@@ -130,9 +121,7 @@ export async function extractKeyFrames(
     throw new Error('無法取得影片長度');
   }
 
-  // Adaptive interval: for short clips use 0.1s, for longer clips use wider interval
-  const rawFrameCount = Math.ceil(duration / 0.1);
-  const totalFrames = Math.min(rawFrameCount, maxFrames);
+  const totalFrames = Math.min(Math.ceil(duration / 0.1), maxFrames);
   const interval = duration / totalFrames;
 
   const canvas = document.createElement('canvas');
@@ -140,47 +129,27 @@ export async function extractKeyFrames(
   canvas.height = videoElement.videoHeight || 480;
   const ctx = canvas.getContext('2d')!;
 
-  let consecutiveFailures = 0;
-
   for (let i = 0; i < totalFrames; i++) {
     const time = Math.min(i * interval, duration - 0.01);
 
-    try {
-      await waitForSeek(videoElement, time);
-    } catch {
-      consecutiveFailures++;
-      if (consecutiveFailures > 5) {
-        console.warn('Too many seek failures, stopping frame extraction');
-        break;
-      }
-      continue;
+    await waitForSeek(videoElement, time);
+    // Small delay to let the video frame render on mobile
+    await new Promise((r) => setTimeout(r, 80));
+
+    // Capture frame image
+    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    const imageBase64 = canvas.toDataURL('image/jpeg', 0.6);
+
+    // Try pose detection (optional)
+    let landmarks: Landmark[] | null = null;
+    if (usePoseDetection && poseLandmarker) {
+      const timestampMs = Math.round(time * 1000);
+      landmarks = detectPose(videoElement, timestampMs);
     }
 
-    // Small delay to let the video frame render
-    await new Promise((r) => setTimeout(r, 50));
-
-    const timestampMs = Math.round(time * 1000);
-    const landmarks = detectPose(videoElement, timestampMs);
-
-    if (landmarks) {
-      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
-      const imageBase64 = canvas.toDataURL('image/jpeg', 0.6);
-
-      const frame: FrameData = {
-        timestamp: time,
-        landmarks,
-        imageBase64,
-      };
-      frames.push(frame);
-      consecutiveFailures = 0;
-      onProgress?.(frame, frames.length - 1, totalFrames);
-    } else {
-      consecutiveFailures++;
-      if (consecutiveFailures > 10) {
-        console.warn('Too many detection failures, stopping');
-        break;
-      }
-    }
+    const frame: FrameData = { timestamp: time, landmarks, imageBase64 };
+    frames.push(frame);
+    onProgress?.(frame, i, totalFrames);
   }
 
   return frames;

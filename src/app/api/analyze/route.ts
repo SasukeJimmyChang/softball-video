@@ -35,13 +35,13 @@ export async function POST(request: NextRequest) {
       handedness: Handedness;
       frames: Array<{
         timestamp: number;
-        landmarks: Array<{ x: number; y: number; z: number; visibility: number }>;
+        landmarks: Array<{ x: number; y: number; z: number; visibility: number }> | null;
       }>;
       images: string[];
       dualPersonality?: boolean;
     } = body;
 
-    if (!mode || !handedness || !frames || !images) {
+    if (!mode || !handedness || !images || images.length === 0) {
       return NextResponse.json(
         { error: 'Missing required fields: mode, handedness, frames, images' },
         { status: 400 }
