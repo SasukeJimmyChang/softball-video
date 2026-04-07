@@ -169,12 +169,20 @@ export async function extractKeyFrames(
   for (let i = 0; i < totalFrames; i++) {
     const time = Math.min(i * interval, duration - 0.01);
 
-    await waitForSeek(videoElement, time);
+    try {
+      await waitForSeek(videoElement, time);
+    } catch {
+      continue; // skip this frame if seek fails
+    }
     // Longer delay for mobile to render the video frame
     await new Promise((r) => setTimeout(r, 200));
 
     // Capture frame image
-    ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    try {
+      ctx.drawImage(videoElement, 0, 0, canvas.width, canvas.height);
+    } catch {
+      continue; // skip if drawImage fails (CORS, etc.)
+    }
 
     // Check if frame is black (failed capture)
     if (isFrameBlack(ctx, canvas.width, canvas.height)) {
@@ -199,7 +207,17 @@ export async function extractKeyFrames(
       }
     }
 
-    const imageBase64 = canvas.toDataURL('image/jpeg', 0.6);
+    let imageBase64: string;
+    try {
+      imageBase64 = canvas.toDataURL('image/jpeg', 0.6);
+    } catch {
+      // toDataURL can fail on some mobile browsers — try PNG fallback
+      try {
+        imageBase64 = canvas.toDataURL('image/png');
+      } catch {
+        continue; // skip this frame entirely
+      }
+    }
 
     // Try pose detection (optional)
     let landmarks: Landmark[] | null = null;
