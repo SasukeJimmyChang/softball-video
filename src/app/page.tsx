@@ -6,9 +6,6 @@ import AnalysisSettings from '@/components/AnalysisSettings';
 import VideoPlayer, { VideoPlayerHandle } from '@/components/VideoPlayer';
 import AnalysisReport from '@/components/AnalysisReport';
 
-/**
- * Read a file as base64 data URL.
- */
 function readFileAsBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -19,140 +16,69 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 /**
- * Method A: Seek-based capture (works on desktop, may fail on iOS)
+ * Capture high-quality frames via seek (desktop) or play (iOS fallback).
  */
-function captureWithSeek(
-  videoEl: HTMLVideoElement, canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D, w: number, h: number, maxFrames: number
-): Promise<string[]> {
-  return new Promise(async (resolve) => {
-    const frames: string[] = [];
-    const duration = videoEl.duration;
-    const count = Math.min(maxFrames, Math.max(6, Math.ceil(duration * 5)));
-    const interval = duration / (count + 1);
+async function captureFrames(videoEl: HTMLVideoElement, maxFrames: number): Promise<string[]> {
+  const duration = videoEl.duration;
+  if (!duration || !isFinite(duration) || duration <= 0) return [];
 
-    for (let i = 1; i <= count; i++) {
-      try {
-        videoEl.currentTime = Math.min(i * interval, duration - 0.05);
-        await new Promise<void>((res) => {
-          const t = setTimeout(res, 2500);
-          videoEl.addEventListener('seeked', () => { clearTimeout(t); res(); }, { once: true });
-        });
-        await new Promise((r) => setTimeout(r, 120));
-        ctx.drawImage(videoEl, 0, 0, w, h);
-        const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
-        if (px[0] + px[1] + px[2] > 15) {
-          frames.push(canvas.toDataURL('image/jpeg', 0.75));
-        }
-      } catch { break; } // If seek throws, stop and let Method B handle it
-    }
-    resolve(frames);
-  });
-}
+  const w = Math.min(videoEl.videoWidth || 640, 720);
+  const h = Math.round(w * ((videoEl.videoHeight || 480) / (videoEl.videoWidth || 640)));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return [];
 
-/**
- * Method B: Play-based capture (works on iOS — no seeking required)
- * Plays the video and captures frames at intervals using requestAnimationFrame.
- */
-function captureWithPlay(
-  videoEl: HTMLVideoElement, canvas: HTMLCanvasElement,
-  ctx: CanvasRenderingContext2D, w: number, h: number, maxFrames: number
-): Promise<string[]> {
+  const count = Math.min(maxFrames, Math.max(6, Math.ceil(duration * 10)));
+  const interval = duration / (count + 1);
+
+  // Try seek-based first
+  let frames: string[] = [];
+  for (let i = 1; i <= count; i++) {
+    try {
+      videoEl.currentTime = Math.min(i * interval, duration - 0.05);
+      await new Promise<void>((res) => {
+        const t = setTimeout(res, 2500);
+        videoEl.addEventListener('seeked', () => { clearTimeout(t); res(); }, { once: true });
+      });
+      await new Promise((r) => setTimeout(r, 120));
+      ctx.drawImage(videoEl, 0, 0, w, h);
+      const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
+      if (px[0] + px[1] + px[2] > 15) {
+        frames.push(canvas.toDataURL('image/jpeg', 0.75));
+      }
+    } catch { break; }
+  }
+  if (frames.length >= 3) return frames;
+
+  // Fallback: play-based capture for iOS
+  frames = [];
   return new Promise((resolve) => {
-    const frames: string[] = [];
-    const duration = videoEl.duration;
     const captureInterval = duration / (maxFrames + 1);
-    let nextCaptureTime = captureInterval;
+    let nextTime = captureInterval;
     let rafId: number;
-
-    const wasMuted = videoEl.muted;
-    const wasCurrentTime = videoEl.currentTime;
     videoEl.muted = true;
     videoEl.currentTime = 0;
 
-    const capture = () => {
+    const tick = () => {
       if (videoEl.paused || videoEl.ended || frames.length >= maxFrames) {
-        videoEl.pause();
-        videoEl.muted = wasMuted;
-        cancelAnimationFrame(rafId);
-        resolve(frames);
-        return;
+        videoEl.pause(); cancelAnimationFrame(rafId); resolve(frames); return;
       }
-
-      if (videoEl.currentTime >= nextCaptureTime) {
+      if (videoEl.currentTime >= nextTime) {
         try {
           ctx.drawImage(videoEl, 0, 0, w, h);
           const px = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
-          if (px[0] + px[1] + px[2] > 15) {
-            frames.push(canvas.toDataURL('image/jpeg', 0.75));
-          }
-        } catch { /* skip */ }
-        nextCaptureTime += captureInterval;
+          if (px[0] + px[1] + px[2] > 15) frames.push(canvas.toDataURL('image/jpeg', 0.75));
+        } catch {}
+        nextTime += captureInterval;
       }
-
-      rafId = requestAnimationFrame(capture);
+      rafId = requestAnimationFrame(tick);
     };
 
-    // Start playing
-    videoEl.play().then(() => {
-      rafId = requestAnimationFrame(capture);
-    }).catch(() => {
-      resolve(frames); // play() failed
-    });
-
-    // Safety timeout
-    setTimeout(() => {
-      videoEl.pause();
-      videoEl.muted = wasMuted;
-      cancelAnimationFrame(rafId);
-      resolve(frames);
-    }, Math.min(duration * 1000 + 2000, 30000));
-  });
-}
-
-/**
- * Capture frames from the page's video element.
- * Tries seek-based first, falls back to play-based for iOS.
- */
-function captureFromDomVideo(
-  videoEl: HTMLVideoElement,
-  maxFrames: number
-): Promise<string[]> {
-  return new Promise(async (resolve) => {
-    const duration = videoEl.duration;
-    if (!duration || !isFinite(duration) || duration <= 0) {
-      resolve([]);
-      return;
-    }
-
-    // 720px gives good detail for biomechanics analysis while keeping file size manageable
-    const w = Math.min(videoEl.videoWidth || 640, 720);
-    const h = Math.round(w * ((videoEl.videoHeight || 480) / (videoEl.videoWidth || 640)));
-
-    let canvas: HTMLCanvasElement;
-    let ctx: CanvasRenderingContext2D | null;
-    try {
-      canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      ctx = canvas.getContext('2d');
-    } catch {
-      resolve([]);
-      return;
-    }
-    if (!ctx) { resolve([]); return; }
-
-    // Try Method A: seek-based (fast, precise)
-    let frames = await captureWithSeek(videoEl, canvas, ctx, w, h, maxFrames);
-    if (frames.length >= 3) {
-      resolve(frames);
-      return;
-    }
-
-    // Method A failed/insufficient — Try Method B: play-based (iOS compatible)
-    console.log('Seek-based capture failed, trying play-based capture...');
-    frames = await captureWithPlay(videoEl, canvas, ctx, w, h, maxFrames);
-    resolve(frames);
+    videoEl.play().then(() => { rafId = requestAnimationFrame(tick); }).catch(() => resolve(frames));
+    setTimeout(() => { videoEl.pause(); cancelAnimationFrame(rafId); resolve(frames); },
+      Math.min(duration * 1000 + 2000, 30000));
   });
 }
 
@@ -168,7 +94,7 @@ export default function Home() {
   const [results, setResults] = useState<AnalysisResultItem[] | null>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [dualPersonality, setDualPersonality] = useState<DualPersonalityReport | null>(null);
-  const [statusMessage, setStatusMessage] = useState<string>('AI 已就緒！請選擇模式並上傳影片。');
+  const [statusMessage, setStatusMessage] = useState<string>('AI 已就緒！請上傳單次揮擊/投球的短片（2-10 秒最佳）。');
   const [statusType, setStatusType] = useState<'ready' | 'processing' | 'error'>('ready');
 
   const videoPlayerRef = useRef<VideoPlayerHandle>(null);
@@ -178,14 +104,18 @@ export default function Home() {
     try {
       const url = URL.createObjectURL(file);
       setVideoUrl(url);
-    } catch {
-      setVideoUrl(null);
-    }
+    } catch { setVideoUrl(null); }
     setResults(null);
     setSummary(null);
     setDualPersonality(null);
     setLandmarks(null);
-    setStatusMessage('影片已載入！建議先播放幾秒再點「開始分析」。');
+
+    const sizeMB = file.size / (1024 * 1024);
+    if (sizeMB > 10) {
+      setStatusMessage(`影片 ${sizeMB.toFixed(0)}MB 較大，建議裁剪為單次揮擊短片（2-10 秒）以提高分析精度。`);
+    } else {
+      setStatusMessage('影片已載入！建議先播放確認後再點「開始分析」。');
+    }
     setStatusType('ready');
   }, []);
 
@@ -199,60 +129,47 @@ export default function Home() {
     setDualPersonality(null);
     setStatusType('processing');
 
+    const fileSizeMB = videoFile.size / (1024 * 1024);
     let images: string[] = [];
+    let uploadMode: 'video' | 'frames' = 'frames';
 
-    // Step 1: Try frame extraction from DOM video
     try {
-      setStatusMessage('步驟 1/3：從影片擷取關鍵幀...（請確認影片有先播放過）');
-      const videoEl = videoPlayerRef.current?.getVideoElement();
-      if (videoEl && videoEl.readyState >= 1) {
-        // 8 frames × 720px × 0.75 quality ≈ 1MB total (under Vercel 4.5MB limit)
-        images = await captureFromDomVideo(videoEl, 8);
-      }
-    } catch (e) {
-      console.warn('DOM video capture failed:', e);
-    }
-
-    // Step 2: If no frames, try direct video upload (only for small files)
-    if (images.length === 0) {
-      const fileSizeMB = videoFile.size / (1024 * 1024);
+      // Strategy: small files → send video directly (most accurate)
+      //           large files → extract frames
       if (fileSizeMB <= 3.5) {
-        // Small enough to send as base64 through Vercel
-        try {
-          setStatusMessage('步驟 1/3：改用影片直傳模式...');
-          const base64 = await readFileAsBase64(videoFile);
-          images = [base64];
-        } catch {
-          // fall through to error
+        // Small file: send entire video to Gemini (best quality, full motion)
+        setStatusMessage('正在讀取影片...(影片直傳模式，分析最精準)');
+        const base64 = await readFileAsBase64(videoFile);
+        images = [base64];
+        uploadMode = 'video';
+      } else {
+        // Large file: extract frames
+        setStatusMessage('正在從影片擷取關鍵幀...(建議播放過影片再分析)');
+        const videoEl = videoPlayerRef.current?.getVideoElement();
+        if (videoEl && videoEl.readyState >= 1) {
+          images = await captureFrames(videoEl, 8);
         }
       }
 
       if (images.length === 0) {
-        setStatusMessage(
-          '錯誤：無法擷取影片畫面。請嘗試：\n' +
-          '1. 上傳影片後先播放幾秒再點分析\n' +
-          '2. 使用較短的影片（10 秒以內）\n' +
+        throw new Error(
+          '無法處理影片。建議：\n' +
+          '1. 裁剪為單次揮擊短片（2-10 秒，<10MB）\n' +
+          '2. 上傳後先播放幾秒再分析\n' +
           '3. 使用 MP4 格式'
         );
-        setStatusType('error');
-        setIsProcessing(false);
-        return;
       }
-    }
 
-    // Step 3: Send to AI
-    try {
       setIsProcessing(false);
       setIsAnalyzing(true);
 
-      const isVideo = images.length === 1 && images[0].startsWith('data:video');
       const analysisParts = ['標準分析'];
       if (options.dualPersonality) analysisParts.push('雙人格教練分析');
 
       setStatusMessage(
-        isVideo
-          ? `步驟 2/3：影片直傳 AI 分析中...（約 15-40 秒）`
-          : `步驟 2/3：${images.length} 幀送入 AI 分析中...（約 10-30 秒）`
+        uploadMode === 'video'
+          ? `影片直傳 AI 分析中（最精準模式）...約 15-40 秒`
+          : `${images.length} 幀送入 AI 分析中...約 10-30 秒`
       );
 
       const response = await fetch('/api/analyze', {
@@ -274,13 +191,11 @@ export default function Home() {
       const data = await response.json();
       setResults(data.items);
       setSummary(data.summary);
-      if (data.dualPersonality) {
-        setDualPersonality(data.dualPersonality);
-      }
-      setStatusMessage('步驟 3/3：分析完成！請查看下方報告。');
+      if (data.dualPersonality) setDualPersonality(data.dualPersonality);
+      setStatusMessage('分析完成！請查看下方報告。');
       setStatusType('ready');
     } catch (error: any) {
-      console.error('API error:', error);
+      console.error('Analysis error:', error);
       setStatusMessage(`錯誤：${error.message}`);
       setStatusType('error');
     } finally {
@@ -307,7 +222,15 @@ export default function Home() {
         </p>
       </div>
 
+      {/* Tips banner */}
       <div className="max-w-6xl mx-auto px-4 mt-4">
+        <div className="bg-blue-900/30 border border-blue-700 rounded-lg p-3 text-xs text-blue-300">
+          <strong>&#128161; 最佳使用方式：</strong>上傳單次揮擊/投球的短片（2-10 秒），分析結果最精準穩定。長影片請先裁剪再上傳。
+        </div>
+      </div>
+
+      {/* Status Bar */}
+      <div className="max-w-6xl mx-auto px-4 mt-2">
         <div
           className={`rounded-lg p-3 text-sm font-medium ${
             statusType === 'ready'
