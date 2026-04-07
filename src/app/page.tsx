@@ -5,7 +5,15 @@ import { AnalysisMode, Handedness, AnalysisResultItem, AnalysisOptions, Landmark
 import AnalysisSettings from '@/components/AnalysisSettings';
 import VideoPlayer, { VideoPlayerHandle } from '@/components/VideoPlayer';
 import AnalysisReport from '@/components/AnalysisReport';
-import { initPoseLandmarker, extractKeyFrames, selectKeyFrames } from '@/lib/pose-detection';
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
 
 export default function Home() {
   const [mode, setMode] = useState<AnalysisMode>('pitching');
@@ -37,7 +45,7 @@ export default function Home() {
   }, []);
 
   const handleAnalyze = useCallback(async () => {
-    if (!videoFile || !videoPlayerRef.current) return;
+    if (!videoFile) return;
 
     try {
       setIsProcessing(true);
@@ -45,74 +53,26 @@ export default function Home() {
       setResults(null);
       setSummary(null);
       setDualPersonality(null);
-      setStatusMessage('正在載入分析模型...');
+      setStatusMessage('正在讀取影片檔案...');
       setStatusType('processing');
 
-      // Initialize MediaPipe (optional — analysis works without it)
-      let poseAvailable = false;
-      try {
-        const initResult = await Promise.race([
-          initPoseLandmarker(),
-          new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 30000)),
-        ]);
-        poseAvailable = initResult === true;
-      } catch {
-        poseAvailable = false;
-      }
+      // Read video file as base64 — send directly to Gemini (no frame extraction needed)
+      const videoBase64 = await readFileAsBase64(videoFile);
 
-      if (poseAvailable) {
-        setStatusMessage('骨架偵測模型就緒，正在擷取影格...');
-      } else {
-        setStatusMessage('骨架偵測不可用，改用純圖片 AI 分析模式...');
-      }
-
-      const videoEl = videoPlayerRef.current.getVideoElement();
-      if (!videoEl) throw new Error('Video element not found');
-
-      // Wait for video metadata with timeout
-      if (videoEl.readyState < 1) {
-        await Promise.race([
-          new Promise<void>((resolve) => {
-            videoEl.onloadedmetadata = () => resolve();
-          }),
-          new Promise<void>((resolve) => setTimeout(resolve, 15000)),
-        ]);
-      }
-
-      if (!videoEl.duration || !isFinite(videoEl.duration)) {
-        throw new Error('無法讀取影片，請換一個影片檔案再試');
-      }
-
-      setStatusMessage('正在擷取影格...');
-
-      // Extract frames (pose detection is optional bonus)
-      const frames = await extractKeyFrames(
-        videoEl,
-        (frame, index, total) => {
-          if (frame.landmarks) setLandmarks(frame.landmarks);
-          setStatusMessage(`擷取影格中... ${index + 1}/${total}`);
-        },
-        20,
-        poseAvailable
-      );
-
-      if (frames.length === 0) {
-        throw new Error('無法擷取影格，請確認影片格式正確');
+      // Check file size (Gemini inline limit ~20MB)
+      const fileSizeMB = videoFile.size / (1024 * 1024);
+      if (fileSizeMB > 20) {
+        throw new Error(`影片檔案太大（${fileSizeMB.toFixed(1)}MB）。請壓縮到 20MB 以下，或裁剪影片長度。`);
       }
 
       setIsProcessing(false);
       setIsAnalyzing(true);
 
-      const poseFrames = frames.filter((f) => f.landmarks).length;
       const analysisParts = ['標準分析'];
       if (options.dualPersonality) analysisParts.push('雙人格教練分析');
-      const poseInfo = poseFrames > 0 ? `（含 ${poseFrames} 幀骨架數據）` : '（純圖片模式）';
-      setStatusMessage(`擷取 ${frames.length} 幀${poseInfo}，正在送入 AI 進行${analysisParts.join(' + ')}...`);
+      setStatusMessage(`正在送入 AI 進行${analysisParts.join(' + ')}...（可能需要 10-30 秒）`);
 
-      // Select key frames for AI analysis (limit to 6 to control cost)
-      const keyFrames = selectKeyFrames(frames, 6);
-
-      // Call analysis API
+      // Call analysis API with video directly
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -120,11 +80,8 @@ export default function Home() {
           mode,
           handedness,
           dualPersonality: options.dualPersonality,
-          frames: keyFrames.map((f) => ({
-            timestamp: f.timestamp,
-            landmarks: f.landmarks,
-          })),
-          images: keyFrames.map((f) => f.imageBase64),
+          video: videoBase64,
+          mimeType: videoFile.type || 'video/mp4',
         }),
       });
 

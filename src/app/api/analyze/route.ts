@@ -3,17 +3,15 @@ import { analyzeWithGemini } from '@/lib/gemini';
 import { buildAnalysisPrompt, buildDualPersonalityPrompt } from '@/lib/prompts';
 import { AnalysisMode, Handedness, AnalysisResultItem, DualPersonalityReport } from '@/types';
 
-// Allow up to 60s for Vercel Pro, 10s for Hobby (Vercel will enforce its own limit)
+// Allow up to 60s for Vercel Pro, 10s for Hobby
 export const maxDuration = 60;
 
 function parseJsonFromResponse(text: string): any {
   let jsonStr = text.trim();
-  // Remove markdown code block wrapper if present
   const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (jsonMatch) {
     jsonStr = jsonMatch[1].trim();
   }
-  // Also try to extract JSON object if there's surrounding text
   const objectMatch = jsonStr.match(/(\{[\s\S]*\})/);
   if (objectMatch) {
     jsonStr = objectMatch[1];
@@ -27,30 +25,33 @@ export async function POST(request: NextRequest) {
     const {
       mode,
       handedness,
-      frames,
-      images,
+      video,
+      mimeType,
       dualPersonality: enableDualPersonality,
     }: {
       mode: AnalysisMode;
       handedness: Handedness;
-      frames: Array<{
-        timestamp: number;
-        landmarks: Array<{ x: number; y: number; z: number; visibility: number }> | null;
-      }>;
-      images: string[];
+      video: string; // base64 data URL of video
+      mimeType: string;
       dualPersonality?: boolean;
     } = body;
 
-    if (!mode || !handedness || !images || images.length === 0) {
+    if (!mode || !handedness || !video) {
       return NextResponse.json(
-        { error: 'Missing required fields: mode, handedness, frames, images' },
+        { error: '缺少必要欄位：mode, handedness, video' },
         { status: 400 }
       );
     }
 
-    // Standard analysis
-    const prompt = buildAnalysisPrompt(mode, handedness, frames);
-    const responseText = await analyzeWithGemini({ prompt, images });
+    // Build prompt (no landmarks — Gemini analyzes video directly)
+    const prompt = buildAnalysisPrompt(mode, handedness, []);
+
+    // Standard analysis — send video directly to Gemini
+    const responseText = await analyzeWithGemini({
+      prompt,
+      video,
+      mimeType: mimeType || 'video/mp4',
+    });
     const parsed = parseJsonFromResponse(responseText);
 
     const result: {
@@ -69,8 +70,12 @@ export async function POST(request: NextRequest) {
 
     // Dual personality analysis (separate API call)
     if (enableDualPersonality) {
-      const dpPrompt = buildDualPersonalityPrompt(mode, handedness, frames);
-      const dpResponseText = await analyzeWithGemini({ prompt: dpPrompt, images });
+      const dpPrompt = buildDualPersonalityPrompt(mode, handedness, []);
+      const dpResponseText = await analyzeWithGemini({
+        prompt: dpPrompt,
+        video,
+        mimeType: mimeType || 'video/mp4',
+      });
       const dpParsed = parseJsonFromResponse(dpResponseText);
 
       result.dualPersonality = {

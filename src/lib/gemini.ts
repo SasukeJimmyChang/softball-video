@@ -15,10 +15,11 @@ function getClient(): GoogleGenerativeAI {
 
 export interface GeminiAnalysisRequest {
   prompt: string;
-  images: string[]; // base64 data URLs
+  video: string; // base64 data URL of video
+  mimeType: string;
 }
 
-// Models to try in order of preference (April 2026: 2.0/1.5 deprecated)
+// Models to try in order of preference (April 2026)
 const MODEL_CANDIDATES = [
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
@@ -27,18 +28,22 @@ const MODEL_CANDIDATES = [
 ];
 
 function buildParts(request: GeminiAnalysisRequest): any[] {
-  const parts: any[] = [{ text: request.prompt }];
-  for (const imageDataUrl of request.images) {
-    const base64Match = imageDataUrl.match(/^data:image\/(.*?);base64,(.*)$/);
-    if (base64Match) {
-      parts.push({
-        inlineData: {
-          mimeType: `image/${base64Match[1]}`,
-          data: base64Match[2],
-        },
-      });
-    }
+  const parts: any[] = [];
+
+  // Add video inline data
+  const base64Match = request.video.match(/^data:(.*?);base64,(.*)$/);
+  if (base64Match) {
+    parts.push({
+      inlineData: {
+        mimeType: base64Match[1] || request.mimeType,
+        data: base64Match[2],
+      },
+    });
   }
+
+  // Add text prompt
+  parts.push({ text: request.prompt });
+
   return parts;
 }
 
@@ -52,9 +57,7 @@ export async function analyzeWithGemini(request: GeminiAnalysisRequest): Promise
 
   let lastError: any = null;
 
-  // Try each model candidate
   for (const modelName of MODEL_CANDIDATES) {
-    // Retry up to 3 times per model (with delay for rate limits / 503)
     for (let attempt = 0; attempt < 3; attempt++) {
       try {
         const model = client.getGenerativeModel({ model: modelName });
@@ -69,34 +72,29 @@ export async function analyzeWithGemini(request: GeminiAnalysisRequest): Promise
         lastError = error;
         const errorMsg = error?.message || '';
 
-        // Rate limited or quota exceeded — wait and retry same model
         if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Too Many Requests')) {
           console.warn(`Model ${modelName} rate limited (attempt ${attempt + 1}), waiting...`);
           await sleep(attempt === 0 ? 5000 : 10000);
           continue;
         }
 
-        // Service unavailable (503) — wait and retry, then try next model
         if (errorMsg.includes('503') || errorMsg.includes('Service Unavailable') || errorMsg.includes('overloaded')) {
           console.warn(`Model ${modelName} unavailable (attempt ${attempt + 1}), waiting...`);
           await sleep(attempt === 0 ? 3000 : 8000);
           continue;
         }
 
-        // Model not found — skip to next model immediately
         if (errorMsg.includes('404') || errorMsg.includes('not found') || errorMsg.includes('not supported')) {
           console.warn(`Model ${modelName} not available, trying next...`);
           break;
         }
 
-        // Other errors — try next model instead of throwing
         console.warn(`Model ${modelName} error: ${errorMsg.slice(0, 100)}, trying next...`);
         break;
       }
     }
   }
 
-  // All models failed
   throw formatError(lastError);
 }
 
@@ -104,16 +102,11 @@ function formatError(error: any): Error {
   const msg = error?.message || String(error);
 
   if (msg.includes('503') || msg.includes('Service Unavailable') || msg.includes('overloaded')) {
-    return new Error(
-      'Gemini API 伺服器暫時忙碌中。這是 Google 端的問題，請等 1-2 分鐘後重試。'
-    );
+    return new Error('Gemini API 伺服器暫時忙碌中。這是 Google 端的問題，請等 1-2 分鐘後重試。');
   }
 
   if (msg.includes('429') || msg.includes('quota') || msg.includes('Too Many Requests')) {
-    return new Error(
-      'Gemini API 免費額度已用完。請稍後再試（建議等 1 分鐘），' +
-      '或到 Google AI Studio 確認額度狀態：https://aistudio.google.com/apikey'
-    );
+    return new Error('Gemini API 額度暫時用完。請等 1 分鐘後再試。');
   }
 
   if (msg.includes('API_KEY') || msg.includes('401') || msg.includes('403')) {
@@ -122,6 +115,10 @@ function formatError(error: any): Error {
 
   if (msg.includes('fetch failed') || msg.includes('network')) {
     return new Error('無法連線到 Gemini API。請檢查網路連線。');
+  }
+
+  if (msg.includes('too large') || msg.includes('size') || msg.includes('payload')) {
+    return new Error('影片檔案太大。請壓縮影片或裁剪長度後重試。');
   }
 
   return new Error(`AI 分析失敗：${msg.slice(0, 200)}`);
