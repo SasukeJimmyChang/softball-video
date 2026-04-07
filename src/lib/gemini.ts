@@ -5,9 +5,7 @@ let genAI: GoogleGenerativeAI | null = null;
 function getClient(): GoogleGenerativeAI {
   if (!genAI) {
     const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new Error('尚未設定 GEMINI_API_KEY 環境變數');
-    }
+    if (!apiKey) throw new Error('尚未設定 GEMINI_API_KEY 環境變數');
     genAI = new GoogleGenerativeAI(apiKey);
   }
   return genAI;
@@ -15,11 +13,9 @@ function getClient(): GoogleGenerativeAI {
 
 export interface GeminiAnalysisRequest {
   prompt: string;
-  video: string; // base64 data URL of video
-  mimeType: string;
+  images: string[]; // base64 data URLs of frame images
 }
 
-// Models to try in order of preference (April 2026)
 const MODEL_CANDIDATES = [
   'gemini-2.5-flash',
   'gemini-2.5-flash-lite',
@@ -29,32 +25,23 @@ const MODEL_CANDIDATES = [
 
 function buildParts(request: GeminiAnalysisRequest): any[] {
   const parts: any[] = [];
-
-  // Add video inline data
-  const base64Match = request.video.match(/^data:(.*?);base64,(.*)$/);
-  if (base64Match) {
-    parts.push({
-      inlineData: {
-        mimeType: base64Match[1] || request.mimeType,
-        data: base64Match[2],
-      },
-    });
+  for (const dataUrl of request.images) {
+    const match = dataUrl.match(/^data:(.*?);base64,(.*)$/);
+    if (match) {
+      parts.push({ inlineData: { mimeType: match[1], data: match[2] } });
+    }
   }
-
-  // Add text prompt
   parts.push({ text: request.prompt });
-
   return parts;
 }
 
-async function sleep(ms: number): Promise<void> {
+async function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function analyzeWithGemini(request: GeminiAnalysisRequest): Promise<string> {
   const client = getClient();
   const parts = buildParts(request);
-
   let lastError: any = null;
 
   for (const modelName of MODEL_CANDIDATES) {
@@ -62,34 +49,30 @@ export async function analyzeWithGemini(request: GeminiAnalysisRequest): Promise
       try {
         const model = client.getGenerativeModel({ model: modelName });
         const result = await model.generateContent(parts);
-        const response = result.response;
-        const text = response.text();
+        const text = result.response.text();
         if (text) {
-          console.log(`Gemini analysis succeeded with model: ${modelName}`);
+          console.log(`Gemini succeeded: ${modelName}`);
           return text;
         }
       } catch (error: any) {
         lastError = error;
-        const errorMsg = error?.message || '';
+        const msg = error?.message || '';
 
-        if (errorMsg.includes('429') || errorMsg.includes('quota') || errorMsg.includes('Too Many Requests')) {
-          console.warn(`Model ${modelName} rate limited (attempt ${attempt + 1}), waiting...`);
-          await sleep(attempt === 0 ? 5000 : 10000);
+        if (msg.includes('429') || msg.includes('quota') || msg.includes('Too Many')) {
+          console.warn(`${modelName} rate limited (${attempt + 1}/3)`);
+          await sleep(5000 + attempt * 5000);
           continue;
         }
-
-        if (errorMsg.includes('503') || errorMsg.includes('Service Unavailable') || errorMsg.includes('overloaded')) {
-          console.warn(`Model ${modelName} unavailable (attempt ${attempt + 1}), waiting...`);
-          await sleep(attempt === 0 ? 3000 : 8000);
+        if (msg.includes('503') || msg.includes('Service Unavailable') || msg.includes('overloaded')) {
+          console.warn(`${modelName} unavailable (${attempt + 1}/3)`);
+          await sleep(3000 + attempt * 5000);
           continue;
         }
-
-        if (errorMsg.includes('404') || errorMsg.includes('not found') || errorMsg.includes('not supported')) {
-          console.warn(`Model ${modelName} not available, trying next...`);
+        if (msg.includes('404') || msg.includes('not found')) {
+          console.warn(`${modelName} not found, next...`);
           break;
         }
-
-        console.warn(`Model ${modelName} error: ${errorMsg.slice(0, 100)}, trying next...`);
+        console.warn(`${modelName} error: ${msg.slice(0, 80)}, next...`);
         break;
       }
     }
@@ -100,26 +83,13 @@ export async function analyzeWithGemini(request: GeminiAnalysisRequest): Promise
 
 function formatError(error: any): Error {
   const msg = error?.message || String(error);
-
-  if (msg.includes('503') || msg.includes('Service Unavailable') || msg.includes('overloaded')) {
-    return new Error('Gemini API 伺服器暫時忙碌中。這是 Google 端的問題，請等 1-2 分鐘後重試。');
-  }
-
-  if (msg.includes('429') || msg.includes('quota') || msg.includes('Too Many Requests')) {
-    return new Error('Gemini API 額度暫時用完。請等 1 分鐘後再試。');
-  }
-
-  if (msg.includes('API_KEY') || msg.includes('401') || msg.includes('403')) {
-    return new Error('API Key 無效或未授權。請確認 GEMINI_API_KEY 環境變數設定正確。');
-  }
-
-  if (msg.includes('fetch failed') || msg.includes('network')) {
-    return new Error('無法連線到 Gemini API。請檢查網路連線。');
-  }
-
-  if (msg.includes('too large') || msg.includes('size') || msg.includes('payload')) {
-    return new Error('影片檔案太大。請壓縮影片或裁剪長度後重試。');
-  }
-
-  return new Error(`AI 分析失敗：${msg.slice(0, 200)}`);
+  if (msg.includes('503') || msg.includes('Service Unavailable'))
+    return new Error('Gemini API 伺服器暫時忙碌中，請等 1-2 分鐘後重試。');
+  if (msg.includes('429') || msg.includes('quota'))
+    return new Error('Gemini API 額度暫時用完，請等 1 分鐘後再試。');
+  if (msg.includes('401') || msg.includes('403') || msg.includes('API_KEY'))
+    return new Error('API Key 無效或未授權。');
+  if (msg.includes('too large') || msg.includes('payload'))
+    return new Error('資料太大，請使用較短的影片。');
+  return new Error(`AI 分析失敗：${msg.slice(0, 150)}`);
 }

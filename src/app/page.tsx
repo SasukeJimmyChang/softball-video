@@ -6,12 +6,97 @@ import AnalysisSettings from '@/components/AnalysisSettings';
 import VideoPlayer, { VideoPlayerHandle } from '@/components/VideoPlayer';
 import AnalysisReport from '@/components/AnalysisReport';
 
-function readFileAsBase64(file: File): Promise<string> {
+/**
+ * Extract frames from a video File using a dedicated offscreen video element.
+ * This avoids all the mobile issues with the DOM video element.
+ */
+async function extractFramesFromFile(file: File, maxFrames: number = 8): Promise<string[]> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = reject;
-    reader.readAsDataURL(file);
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    // Use crossOrigin to avoid tainted canvas
+    video.crossOrigin = 'anonymous';
+
+    const url = URL.createObjectURL(file);
+    video.src = url;
+
+    const cleanup = () => {
+      URL.revokeObjectURL(url);
+      video.remove();
+    };
+
+    video.onerror = () => {
+      cleanup();
+      reject(new Error('影片載入失敗，請確認影片格式正確（建議 MP4）'));
+    };
+
+    video.onloadeddata = async () => {
+      try {
+        const duration = video.duration;
+        if (!duration || !isFinite(duration) || duration <= 0) {
+          throw new Error('無法取得影片長度');
+        }
+
+        const frameCount = Math.min(maxFrames, Math.ceil(duration * 2)); // max 2fps
+        const interval = duration / (frameCount + 1); // avoid exact start/end
+
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.min(video.videoWidth, 640); // limit resolution for speed
+        canvas.height = Math.round((canvas.width / video.videoWidth) * video.videoHeight);
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('Canvas 初始化失敗');
+
+        const frames: string[] = [];
+
+        for (let i = 1; i <= frameCount; i++) {
+          const time = Math.min(i * interval, duration - 0.1);
+
+          // Seek to time
+          video.currentTime = time;
+          await new Promise<void>((res) => {
+            const onSeeked = () => {
+              video.removeEventListener('seeked', onSeeked);
+              res();
+            };
+            video.addEventListener('seeked', onSeeked);
+            // Timeout fallback
+            setTimeout(res, 2000);
+          });
+
+          // Small delay for frame to render
+          await new Promise((r) => setTimeout(r, 150));
+
+          // Capture
+          try {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+            // Quick black frame check (sample center pixel)
+            const centerPixel = ctx.getImageData(
+              Math.floor(canvas.width / 2),
+              Math.floor(canvas.height / 2),
+              1, 1
+            ).data;
+            const isTotallyBlack = centerPixel[0] + centerPixel[1] + centerPixel[2] < 15;
+
+            if (!isTotallyBlack) {
+              const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+              frames.push(dataUrl);
+            }
+          } catch (e) {
+            console.warn('Frame capture failed at', time, e);
+            // Continue to next frame
+          }
+        }
+
+        cleanup();
+        resolve(frames);
+      } catch (e) {
+        cleanup();
+        reject(e);
+      }
+    };
   });
 }
 
@@ -53,16 +138,18 @@ export default function Home() {
       setResults(null);
       setSummary(null);
       setDualPersonality(null);
-      setStatusMessage('正在讀取影片檔案...');
+      setStatusMessage('正在從影片擷取關鍵幀...');
       setStatusType('processing');
 
-      // Read video file as base64 — send directly to Gemini (no frame extraction needed)
-      const videoBase64 = await readFileAsBase64(videoFile);
+      // Extract frames using a dedicated video element (avoids mobile DOM issues)
+      const frames = await extractFramesFromFile(videoFile, 8);
 
-      // Check file size (Gemini inline limit ~20MB)
-      const fileSizeMB = videoFile.size / (1024 * 1024);
-      if (fileSizeMB > 20) {
-        throw new Error(`影片檔案太大（${fileSizeMB.toFixed(1)}MB）。請壓縮到 20MB 以下，或裁剪影片長度。`);
+      if (frames.length === 0) {
+        throw new Error(
+          '無法從影片擷取畫面。請嘗試：\n' +
+          '1. 使用 MP4 格式的影片\n' +
+          '2. 影片長度至少 1 秒以上'
+        );
       }
 
       setIsProcessing(false);
@@ -70,9 +157,9 @@ export default function Home() {
 
       const analysisParts = ['標準分析'];
       if (options.dualPersonality) analysisParts.push('雙人格教練分析');
-      setStatusMessage(`正在送入 AI 進行${analysisParts.join(' + ')}...（可能需要 10-30 秒）`);
+      setStatusMessage(`已擷取 ${frames.length} 幀，正在送入 AI 進行${analysisParts.join(' + ')}...（約 10-30 秒）`);
 
-      // Call analysis API with video directly
+      // Call analysis API with frame images
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -80,8 +167,7 @@ export default function Home() {
           mode,
           handedness,
           dualPersonality: options.dualPersonality,
-          video: videoBase64,
-          mimeType: videoFile.type || 'video/mp4',
+          images: frames,
         }),
       });
 
@@ -110,7 +196,6 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-[#1a1a2e] to-[#16213e]">
-      {/* Header */}
       <header className="bg-[#1a1a2e] border-b border-gray-700 px-4 py-3">
         <div className="max-w-6xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -121,14 +206,12 @@ export default function Home() {
         </div>
       </header>
 
-      {/* Subtitle */}
       <div className="bg-[#1a1a2e] px-4 py-3 text-center">
         <p className="text-gray-300 text-sm">
           AI 姿勢辨識輔助工具 · 投球／打擊／守備分析 · 結果僅供參考
         </p>
       </div>
 
-      {/* Status Bar */}
       <div className="max-w-6xl mx-auto px-4 mt-4">
         <div
           className={`rounded-lg p-3 text-sm font-medium ${
@@ -146,9 +229,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="max-w-6xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left: Settings */}
         <div className="lg:col-span-1">
           <AnalysisSettings
             mode={mode}
@@ -164,7 +245,6 @@ export default function Home() {
           />
         </div>
 
-        {/* Right: Video + Report */}
         <div className="lg:col-span-2 space-y-6">
           <VideoPlayer
             ref={videoPlayerRef}
@@ -181,7 +261,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Footer */}
       <footer className="text-center py-6 text-gray-500 text-sm">
         <p>&#9432; 本工具由 AI 提供參考性建議，不代表專業教練指導，結果請自行評估</p>
       </footer>
