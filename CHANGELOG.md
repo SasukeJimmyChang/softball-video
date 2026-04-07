@@ -4,6 +4,25 @@
 
 ---
 
+## [v0.3.1] — 2026-04-07
+
+### 修復：Gemini API 429 Quota Exceeded 錯誤
+
+**問題描述**：`gemini-2.0-flash` 免費額度為 0 或已耗盡，API 回傳 429 Too Many Requests。
+
+**修復內容**：
+- 新增 model fallback 機制：`gemini-2.0-flash` → `gemini-1.5-flash` → `gemini-1.5-flash-latest`
+- 遇到 429 自動等待 5-10 秒後重試（每個 model 最多重試 2 次）
+- 所有 API 錯誤訊息中文化，不再顯示原始 JSON 錯誤
+- 額度用完時顯示友善提示（建議等 1 分鐘或確認 API Key）
+
+### 異動檔案
+| 檔案 | 變更 |
+|------|------|
+| `src/lib/gemini.ts` | model fallback、retry、錯誤中文化 |
+
+---
+
 ## [v0.3.0] — 2026-04-07
 
 ### 修復：手機分析卡住問題
