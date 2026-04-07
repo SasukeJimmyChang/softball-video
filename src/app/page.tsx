@@ -45,32 +45,41 @@ export default function Home() {
       setResults(null);
       setSummary(null);
       setDualPersonality(null);
-      setStatusMessage('正在初始化 MediaPipe 骨架偵測...');
+      setStatusMessage('正在載入骨架偵測模型（首次可能需要 10-20 秒）...');
       setStatusType('processing');
 
-      // Initialize MediaPipe
-      await initPoseLandmarker();
+      // Initialize MediaPipe with timeout
+      const initTimeout = new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('骨架偵測模型載入逾時，請重新整理頁面再試')), 60000)
+      );
+      await Promise.race([initPoseLandmarker(), initTimeout]);
 
       const videoEl = videoPlayerRef.current.getVideoElement();
       if (!videoEl) throw new Error('Video element not found');
 
-      // Wait for video metadata
+      // Wait for video metadata with timeout
       if (videoEl.readyState < 1) {
-        await new Promise<void>((resolve) => {
-          videoEl.onloadedmetadata = () => resolve();
-        });
+        const metaTimeout = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('影片載入逾時')), 15000)
+        );
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            videoEl.onloadedmetadata = () => resolve();
+          }),
+          metaTimeout,
+        ]);
       }
 
       setStatusMessage('正在擷取影格並偵測骨架...');
 
-      // Extract frames with pose detection
+      // Extract frames with pose detection (max 30 frames for mobile performance)
       const frames = await extractKeyFrames(
         videoEl,
         (frame, index, total) => {
           setLandmarks(frame.landmarks);
           setStatusMessage(`骨架偵測中... ${index + 1}/${total} 幀`);
         },
-        50
+        30
       );
 
       if (frames.length === 0) {

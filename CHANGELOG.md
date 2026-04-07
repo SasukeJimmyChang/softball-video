@@ -4,6 +4,45 @@
 
 ---
 
+## [v0.3.0] — 2026-04-07
+
+### 修復：手機分析卡住問題
+
+**問題描述**：手機 Chrome 上點「開始分析」後卡在「骨架偵測中...」，Gemini API 從未被呼叫。
+
+**根本原因**：
+1. MediaPipe `pose_landmarker_heavy` 模型 ~30MB，手機下載太慢
+2. MediaPipe GPU delegate 在部分手機瀏覽器上初始化失敗，無錯誤回報
+3. `video.onseeked` 事件在手機瀏覽器上不可靠，可能永遠不觸發導致 Promise 卡死
+4. 50 幀擷取量在手機上太多
+
+**修復內容**：
+- 模型改用 `pose_landmarker_lite`（~5MB，手機載入快 6 倍）
+- GPU 初始化失敗自動 fallback 到 CPU delegate
+- video seek 改用 timeout + polling fallback（3 秒內未 seeked 自動跳過）
+- 最大幀數從 50 降到 30，自適應間隔分配
+- 連續失敗超過 5/10 次自動中止，不再卡死
+- 模型載入加 60 秒 timeout，影片 metadata 加 15 秒 timeout
+- 每幀 seek 後加 50ms 延遲讓影格正確渲染
+
+### 修復：按鈕顯示 `&#9203;` 原始碼
+- JSX 中 `{}` 表達式裡的 HTML entity 不會被渲染
+- 改用 Unicode escape：`\u23F3`（沙漏）、`\u25B6`（播放）
+
+### 新增：Vercel 執行時間設定
+- API route 加入 `export const maxDuration = 60`（Vercel Pro 支援 60 秒）
+- 改善 Gemini 回應 JSON 解析容錯
+
+### 異動檔案
+| 檔案 | 變更 |
+|------|------|
+| `src/lib/pose-detection.ts` | 模型改 lite、GPU→CPU fallback、seek timeout、自適應幀數 |
+| `src/components/AnalysisSettings.tsx` | 修復 HTML entity 渲染 |
+| `src/app/page.tsx` | 加入初始化 timeout、改善狀態提示、降低最大幀數 |
+| `src/app/api/analyze/route.ts` | 加 maxDuration、改善 JSON 解析 |
+
+---
+
 ## [v0.2.1] — 2026-04-07
 
 ### 文件新增

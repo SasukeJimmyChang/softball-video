@@ -153,7 +153,7 @@ export default function AnalysisSettings({
             : 'bg-gray-300 cursor-not-allowed'
         }`}
       >
-        {isAnalyzing ? '&#9203; 分析中...' : '&#9654; 開始分析'}
+        {isAnalyzing ? '\u23F3 分析中...' : '\u25B6 開始分析'}
       </button>
 
       {/* Color Legend */}
