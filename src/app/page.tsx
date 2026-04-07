@@ -7,91 +7,102 @@ import VideoPlayer, { VideoPlayerHandle } from '@/components/VideoPlayer';
 import AnalysisReport from '@/components/AnalysisReport';
 
 /**
- * Extract frames from a video File using a dedicated offscreen video element.
- * This avoids all the mobile issues with the DOM video element.
+ * Extract frames from video using FileReader + offscreen approach.
+ * If that fails, fallback to reading the file as base64 for direct API use.
  */
-async function extractFramesFromFile(file: File, maxFrames: number = 20): Promise<string[]> {
+async function extractFrames(file: File, maxFrames: number = 20): Promise<string[]> {
+  // Method 1: Try using an offscreen video + canvas
+  try {
+    const frames = await extractWithCanvas(file, maxFrames);
+    if (frames.length > 0) return frames;
+  } catch (e) {
+    console.warn('Canvas extraction failed, trying fallback:', e);
+  }
+
+  // Method 2: Fallback — read video as base64 and let Gemini handle it directly
+  // (only works for files under ~20MB due to inline data limits)
+  console.log('Using direct video upload fallback');
+  const base64 = await readFileAsBase64(file);
+  return [base64]; // Single "frame" that is actually the whole video
+}
+
+function readFileAsBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('檔案讀取失敗'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function extractWithCanvas(file: File, maxFrames: number): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
-    // Do NOT set crossOrigin — blob URLs don't support CORS and it causes errors on mobile
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
 
     const url = URL.createObjectURL(file);
     video.src = url;
 
     const cleanup = () => {
       try { URL.revokeObjectURL(url); } catch {}
-      try { video.remove(); } catch {}
     };
 
-    video.onerror = () => {
+    const timeoutId = setTimeout(() => {
       cleanup();
-      reject(new Error('影片載入失敗，請確認影片格式正確（建議 MP4）'));
+      reject(new Error('影片載入逾時'));
+    }, 15000);
+
+    video.onerror = () => {
+      clearTimeout(timeoutId);
+      cleanup();
+      reject(new Error('影片格式不支援'));
     };
 
     video.onloadeddata = async () => {
+      clearTimeout(timeoutId);
       try {
         const duration = video.duration;
         if (!duration || !isFinite(duration) || duration <= 0) {
           throw new Error('無法取得影片長度');
         }
 
-        // 10fps sampling, capped at maxFrames
         const frameCount = Math.min(maxFrames, Math.ceil(duration * 10));
         const interval = duration / (frameCount + 1);
 
+        const w = Math.min(video.videoWidth || 640, 960);
+        const h = Math.round((w / (video.videoWidth || 640)) * (video.videoHeight || 480));
         const canvas = document.createElement('canvas');
-        canvas.width = Math.min(video.videoWidth || 640, 960);
-        canvas.height = Math.round((canvas.width / (video.videoWidth || 640)) * (video.videoHeight || 480));
+        canvas.width = w;
+        canvas.height = h;
         const ctx = canvas.getContext('2d');
-        if (!ctx) throw new Error('Canvas 初始化失敗');
+        if (!ctx) throw new Error('Canvas 不可用');
 
         const frames: string[] = [];
 
         for (let i = 1; i <= frameCount; i++) {
-          const time = Math.min(i * interval, duration - 0.1);
+          const time = Math.min(i * interval, duration - 0.05);
 
-          // Seek to time — wrapped in try-catch for mobile safety
-          try {
-            video.currentTime = time;
-          } catch (seekErr) {
-            console.warn(`[frame ${i}] seek failed:`, seekErr);
-            continue;
-          }
+          try { video.currentTime = time; } catch { continue; }
 
+          // Wait for seeked with timeout
           await new Promise<void>((res) => {
-            const timer = setTimeout(res, 2000);
-            const onSeeked = () => {
-              clearTimeout(timer);
-              video.removeEventListener('seeked', onSeeked);
-              res();
-            };
-            video.addEventListener('seeked', onSeeked);
+            const t = setTimeout(res, 2000);
+            video.addEventListener('seeked', () => { clearTimeout(t); res(); }, { once: true });
           });
+          await new Promise((r) => setTimeout(r, 100));
 
-          await new Promise((r) => setTimeout(r, 150));
-
-          // Capture frame
           try {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            // Quick black frame check
-            const centerPixel = ctx.getImageData(
-              Math.floor(canvas.width / 2),
-              Math.floor(canvas.height / 2),
-              1, 1
-            ).data;
-            const isTotallyBlack = centerPixel[0] + centerPixel[1] + centerPixel[2] < 15;
-
-            if (!isTotallyBlack) {
-              const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
-              frames.push(dataUrl);
+            ctx.drawImage(video, 0, 0, w, h);
+            // Sample a few pixels to check if frame is blank
+            const d = ctx.getImageData(w >> 1, h >> 1, 1, 1).data;
+            if (d[0] + d[1] + d[2] > 15) {
+              frames.push(canvas.toDataURL('image/jpeg', 0.7));
             }
-          } catch (captureErr) {
-            console.warn(`[frame ${i}] capture failed:`, captureErr);
-          }
+          } catch { /* skip frame */ }
         }
 
         cleanup();
@@ -145,29 +156,26 @@ export default function Home() {
       setStatusMessage('正在從影片擷取關鍵幀...');
       setStatusType('processing');
 
-      let frames: string[];
-      try {
-        frames = await extractFramesFromFile(videoFile, 20);
-      } catch (extractErr: any) {
-        throw new Error(`影格擷取失敗（${extractErr.message}）。請嘗試用 MP4 格式的影片。`);
-      }
+      const frames = await extractFrames(videoFile, 20);
 
       if (frames.length === 0) {
-        throw new Error(
-          '無法從影片擷取畫面（全為黑畫面）。請嘗試：\n' +
-          '1. 使用 MP4 H.264 格式的影片\n' +
-          '2. 影片長度至少 1 秒以上'
-        );
+        throw new Error('無法從影片擷取畫面。請使用 MP4 格式的影片。');
       }
 
       setIsProcessing(false);
       setIsAnalyzing(true);
 
+      const isVideoFallback = frames.length === 1 && frames[0].startsWith('data:video');
       const analysisParts = ['標準分析'];
       if (options.dualPersonality) analysisParts.push('雙人格教練分析');
-      setStatusMessage(`已擷取 ${frames.length} 幀，正在送入 AI 進行${analysisParts.join(' + ')}...（約 10-30 秒）`);
 
-      // Call analysis API with frame images
+      if (isVideoFallback) {
+        setStatusMessage(`改用影片直傳模式，正在送入 AI 進行${analysisParts.join(' + ')}...（約 10-30 秒）`);
+      } else {
+        setStatusMessage(`已擷取 ${frames.length} 幀，正在送入 AI 進行${analysisParts.join(' + ')}...（約 10-30 秒）`);
+      }
+
+      // Call analysis API
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
