@@ -138,3 +138,47 @@ POST /api/analyze
   → 色碼卡片（紅/橙/綠/藍）
   → 雙人格報告（如有勾選）
 ```
+
+---
+
+## 部署指南（Vercel）
+
+### 步驟一：推送到 GitHub
+確保你的程式碼已推送到 GitHub 上的 repository。
+
+### 步驟二：Vercel 連結
+1. 前往 [vercel.com](https://vercel.com/) 並用 GitHub 帳號登入
+2. 點擊 **「Add New... → Project」**
+3. 選擇你的 `softball-video` repository
+4. Framework Preset 會自動偵測為 **Next.js**（不用改）
+
+### 步驟三：設定環境變數
+在 Vercel 的部署設定頁面，找到 **「Environment Variables」** 區塊，新增：
+
+| Key | Value |
+|-----|-------|
+| `GEMINI_API_KEY` | 你的 Google AI Studio API Key |
+
+> **重要**：不要把 API Key 寫在程式碼裡或 commit 到 git。永遠透過環境變數設定。
+
+### 步驟四：部署
+點擊 **「Deploy」**，Vercel 會自動：
+1. 安裝依賴 (`npm install`)
+2. 建構專案 (`next build`)
+3. 部署到 `https://your-project.vercel.app`
+
+### 後續更新
+之後只要 `git push` 到 GitHub，Vercel 就會自動重新部署（CI/CD 內建）。
+
+### 自訂網域（可選）
+在 Vercel Dashboard → 你的專案 → Settings → Domains，可以綁定自己的網域。
+
+### Vercel 免費方案限制
+| 項目 | 限制 |
+|------|------|
+| 頻寬 | 100 GB/月 |
+| Serverless 執行時間 | 10 秒（Hobby）/ 60 秒（Pro） |
+| 部署次數 | 無限制 |
+| 費用 | Hobby 方案免費 |
+
+> **注意**：Gemini API 分析可能需要數秒，如果影片較長且分析項目多，Hobby 方案的 10 秒限制可能不夠。可考慮升級 Vercel Pro ($20/月) 或改用 Streaming Response。
