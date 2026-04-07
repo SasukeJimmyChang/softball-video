@@ -10,13 +10,12 @@ import AnalysisReport from '@/components/AnalysisReport';
  * Extract frames from a video File using a dedicated offscreen video element.
  * This avoids all the mobile issues with the DOM video element.
  */
-async function extractFramesFromFile(file: File, maxFrames: number = 8): Promise<string[]> {
+async function extractFramesFromFile(file: File, maxFrames: number = 20): Promise<string[]> {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
     video.preload = 'auto';
-    // Use crossOrigin to avoid tainted canvas
     video.crossOrigin = 'anonymous';
 
     const url = URL.createObjectURL(file);
@@ -39,11 +38,13 @@ async function extractFramesFromFile(file: File, maxFrames: number = 8): Promise
           throw new Error('無法取得影片長度');
         }
 
-        const frameCount = Math.min(maxFrames, Math.ceil(duration * 2)); // max 2fps
-        const interval = duration / (frameCount + 1); // avoid exact start/end
+        // 10fps sampling, capped at maxFrames
+        const frameCount = Math.min(maxFrames, Math.ceil(duration * 10));
+        const interval = duration / (frameCount + 1);
 
         const canvas = document.createElement('canvas');
-        canvas.width = Math.min(video.videoWidth, 640); // limit resolution for speed
+        // Higher resolution for better analysis accuracy
+        canvas.width = Math.min(video.videoWidth, 960);
         canvas.height = Math.round((canvas.width / video.videoWidth) * video.videoHeight);
         const ctx = canvas.getContext('2d');
         if (!ctx) throw new Error('Canvas 初始化失敗');
@@ -142,7 +143,7 @@ export default function Home() {
       setStatusType('processing');
 
       // Extract frames using a dedicated video element (avoids mobile DOM issues)
-      const frames = await extractFramesFromFile(videoFile, 8);
+      const frames = await extractFramesFromFile(videoFile, 20);
 
       if (frames.length === 0) {
         throw new Error(
