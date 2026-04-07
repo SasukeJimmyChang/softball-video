@@ -102,6 +102,8 @@ const VideoPlayer = forwardRef<VideoPlayerHandle, VideoPlayerProps>(
                 controls
                 className="w-full h-full object-contain"
                 playsInline
+                preload="auto"
+                muted
               />
               <canvas
                 ref={canvasRef}
