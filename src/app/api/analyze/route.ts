@@ -17,42 +17,20 @@ function parseJsonFromResponse(text: string): any {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { mode, handedness, images, dualPersonality: enableDualPersonality }:
+    const { mode, handedness, images, dualPersonality: dpOnly }:
       { mode: AnalysisMode; handedness: Handedness; images: string[]; dualPersonality?: boolean } = body;
 
     if (!mode || !handedness || !images || images.length === 0) {
       return NextResponse.json({ error: '缺少必要欄位' }, { status: 400 });
     }
 
-    // Run both analyses in PARALLEL to stay within Vercel timeout
-    const standardPrompt = buildAnalysisPrompt(mode, handedness, []);
-    const standardCall = analyzeWithGemini({ prompt: standardPrompt, images });
-
-    let dpCall: Promise<string> | null = null;
-    if (enableDualPersonality) {
+    // If dualPersonality flag is set, ONLY do dual personality analysis
+    if (dpOnly) {
       const dpPrompt = buildDualPersonalityPrompt(mode, handedness, []);
-      dpCall = analyzeWithGemini({ prompt: dpPrompt, images });
-    }
-
-    // Await both simultaneously
-    const [standardText, dpText] = await Promise.all([
-      standardCall,
-      dpCall ?? Promise.resolve(null),
-    ]);
-
-    // Parse standard analysis
-    const parsed = parseJsonFromResponse(standardText);
-    const result: { summary: string; items: AnalysisResultItem[]; dualPersonality?: DualPersonalityReport } = {
-      summary: parsed.summary || '',
-      items: (parsed.items || []).map((item: any) => ({
-        id: item.id, name: item.name, status: item.status, comment: item.comment,
-      })),
-    };
-
-    // Parse dual personality (if enabled)
-    if (dpText) {
+      const dpText = await analyzeWithGemini({ prompt: dpPrompt, images });
       const dpParsed = parseJsonFromResponse(dpText);
-      result.dualPersonality = {
+
+      const dp: DualPersonalityReport = {
         encouragingCoach: {
           strengths: dpParsed.encouragingCoach?.strengths || [],
           suggestedLineup: dpParsed.encouragingCoach?.suggestedLineup || '',
@@ -80,9 +58,21 @@ export async function POST(request: NextRequest) {
           ...(dpParsed.harshScout?.roast ? { roast: dpParsed.harshScout.roast } : {}),
         },
       };
+
+      return NextResponse.json({ dualPersonality: dp });
     }
 
-    return NextResponse.json(result);
+    // Standard analysis only
+    const prompt = buildAnalysisPrompt(mode, handedness, []);
+    const responseText = await analyzeWithGemini({ prompt, images });
+    const parsed = parseJsonFromResponse(responseText);
+
+    return NextResponse.json({
+      summary: parsed.summary || '',
+      items: (parsed.items || []).map((item: any) => ({
+        id: item.id, name: item.name, status: item.status, comment: item.comment,
+      })),
+    });
   } catch (error: any) {
     console.error('Analysis API error:', error);
     return NextResponse.json({ error: error.message || 'Analysis failed' }, { status: 500 });

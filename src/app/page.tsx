@@ -163,24 +163,17 @@ export default function Home() {
       setIsProcessing(false);
       setIsAnalyzing(true);
 
-      const analysisParts = ['標準分析'];
-      if (options.dualPersonality) analysisParts.push('雙人格教練分析');
-
+      // Call 1: Standard analysis
       setStatusMessage(
         uploadMode === 'video'
-          ? `影片直傳 AI 分析中（最精準模式）...約 15-40 秒`
-          : `${images.length} 幀送入 AI 分析中...約 10-30 秒`
+          ? '影片直傳 AI 標準分析中...約 10-20 秒'
+          : `${images.length} 幀送入 AI 標準分析中...約 10-20 秒`
       );
 
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          mode,
-          handedness,
-          dualPersonality: options.dualPersonality,
-          images,
-        }),
+        body: JSON.stringify({ mode, handedness, images }),
       });
 
       if (!response.ok) {
@@ -191,7 +184,22 @@ export default function Home() {
       const data = await response.json();
       setResults(data.items);
       setSummary(data.summary);
-      if (data.dualPersonality) setDualPersonality(data.dualPersonality);
+
+      // Call 2: Dual personality (separate request to avoid timeout)
+      if (options.dualPersonality) {
+        setStatusMessage('標準分析完成！正在進行雙人格教練分析...約 10-20 秒');
+
+        const dpResponse = await fetch('/api/analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode, handedness, images, dualPersonality: true }),
+        });
+
+        if (dpResponse.ok) {
+          const dpData = await dpResponse.json();
+          if (dpData.dualPersonality) setDualPersonality(dpData.dualPersonality);
+        }
+      }
       setStatusMessage('分析完成！請查看下方報告。');
       setStatusType('ready');
     } catch (error: any) {
