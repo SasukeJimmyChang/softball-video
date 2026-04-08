@@ -8,13 +8,9 @@ export const maxDuration = 60;
 function parseJsonFromResponse(text: string): any {
   let jsonStr = text.trim();
   const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
-  }
+  if (jsonMatch) jsonStr = jsonMatch[1].trim();
   const objectMatch = jsonStr.match(/(\{[\s\S]*\})/);
-  if (objectMatch) {
-    jsonStr = objectMatch[1];
-  }
+  if (objectMatch) jsonStr = objectMatch[1];
   return JSON.parse(jsonStr);
 }
 
@@ -28,11 +24,24 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: '缺少必要欄位' }, { status: 400 });
     }
 
-    // Standard analysis
-    const prompt = buildAnalysisPrompt(mode, handedness, []);
-    const responseText = await analyzeWithGemini({ prompt, images });
-    const parsed = parseJsonFromResponse(responseText);
+    // Run both analyses in PARALLEL to stay within Vercel timeout
+    const standardPrompt = buildAnalysisPrompt(mode, handedness, []);
+    const standardCall = analyzeWithGemini({ prompt: standardPrompt, images });
 
+    let dpCall: Promise<string> | null = null;
+    if (enableDualPersonality) {
+      const dpPrompt = buildDualPersonalityPrompt(mode, handedness, []);
+      dpCall = analyzeWithGemini({ prompt: dpPrompt, images });
+    }
+
+    // Await both simultaneously
+    const [standardText, dpText] = await Promise.all([
+      standardCall,
+      dpCall ?? Promise.resolve(null),
+    ]);
+
+    // Parse standard analysis
+    const parsed = parseJsonFromResponse(standardText);
     const result: { summary: string; items: AnalysisResultItem[]; dualPersonality?: DualPersonalityReport } = {
       summary: parsed.summary || '',
       items: (parsed.items || []).map((item: any) => ({
@@ -40,12 +49,9 @@ export async function POST(request: NextRequest) {
       })),
     };
 
-    // Dual personality analysis
-    if (enableDualPersonality) {
-      const dpPrompt = buildDualPersonalityPrompt(mode, handedness, []);
-      const dpResponseText = await analyzeWithGemini({ prompt: dpPrompt, images });
-      const dpParsed = parseJsonFromResponse(dpResponseText);
-
+    // Parse dual personality (if enabled)
+    if (dpText) {
+      const dpParsed = parseJsonFromResponse(dpText);
       result.dualPersonality = {
         encouragingCoach: {
           strengths: dpParsed.encouragingCoach?.strengths || [],
