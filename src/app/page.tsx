@@ -85,7 +85,7 @@ async function captureFrames(videoEl: HTMLVideoElement, maxFrames: number): Prom
 export default function Home() {
   const [mode, setMode] = useState<AnalysisMode>('pitching');
   const [handedness, setHandedness] = useState<Handedness>('right');
-  const [options, setOptions] = useState<AnalysisOptions>({ dualPersonality: false });
+  const [options, setOptions] = useState<AnalysisOptions>({ dualPersonality: false, skillLevel: 'beginner' });
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [landmarks, setLandmarks] = useState<Landmark[] | null>(null);
@@ -173,7 +173,7 @@ export default function Home() {
       const response = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode, handedness, images }),
+        body: JSON.stringify({ mode, handedness, images, skillLevel: options.skillLevel }),
       });
 
       if (!response.ok) {
@@ -192,7 +192,7 @@ export default function Home() {
         const dpResponse = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ mode, handedness, images, dualPersonality: true }),
+          body: JSON.stringify({ mode, handedness, images, dualPersonality: true, skillLevel: options.skillLevel }),
         });
 
         if (dpResponse.ok) {

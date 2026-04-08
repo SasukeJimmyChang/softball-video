@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeWithGemini } from '@/lib/gemini';
 import { buildAnalysisPrompt, buildDualPersonalityPrompt } from '@/lib/prompts';
-import { AnalysisMode, Handedness, AnalysisResultItem, DualPersonalityReport } from '@/types';
+import { AnalysisMode, Handedness, SkillLevel, AnalysisResultItem, DualPersonalityReport } from '@/types';
 
 export const maxDuration = 60;
 
@@ -17,8 +17,8 @@ function parseJsonFromResponse(text: string): any {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { mode, handedness, images, dualPersonality: dpOnly }:
-      { mode: AnalysisMode; handedness: Handedness; images: string[]; dualPersonality?: boolean } = body;
+    const { mode, handedness, images, dualPersonality: dpOnly, skillLevel }:
+      { mode: AnalysisMode; handedness: Handedness; images: string[]; dualPersonality?: boolean; skillLevel?: SkillLevel } = body;
 
     if (!mode || !handedness || !images || images.length === 0) {
       return NextResponse.json({ error: '缺少必要欄位' }, { status: 400 });
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest) {
 
     // If dualPersonality flag is set, ONLY do dual personality analysis
     if (dpOnly) {
-      const dpPrompt = buildDualPersonalityPrompt(mode, handedness, []);
+      const dpPrompt = buildDualPersonalityPrompt(mode, handedness, [], skillLevel);
       const dpText = await analyzeWithGemini({ prompt: dpPrompt, images });
       const dpParsed = parseJsonFromResponse(dpText);
 
@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Standard analysis only
-    const prompt = buildAnalysisPrompt(mode, handedness, []);
+    const prompt = buildAnalysisPrompt(mode, handedness, [], skillLevel);
     const responseText = await analyzeWithGemini({ prompt, images });
     const parsed = parseJsonFromResponse(responseText);
 

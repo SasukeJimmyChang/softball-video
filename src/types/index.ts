@@ -46,8 +46,11 @@ export interface AnalysisResult {
   dualPersonality?: DualPersonalityReport;
 }
 
+export type SkillLevel = 'beginner' | 'advanced';
+
 export interface AnalysisOptions {
   dualPersonality: boolean;
+  skillLevel: SkillLevel;
 }
 
 export interface KeypointFrame {

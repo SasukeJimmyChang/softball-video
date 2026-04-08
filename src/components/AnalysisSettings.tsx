@@ -103,6 +103,36 @@ export default function AnalysisSettings({
         </div>
       </div>
 
+      {/* Skill Level */}
+      <div className="mb-4">
+        <label className="text-sm font-semibold text-gray-600 mb-2 block">選手程度</label>
+        <div className="flex gap-2">
+          <button
+            onClick={() => onOptionsChange({ ...options, skillLevel: 'beginner' })}
+            className={`flex-1 py-2 rounded-lg font-semibold transition-colors ${
+              options.skillLevel === 'beginner'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 text-gray-500 hover:bg-gray-300'
+            }`}
+          >
+            &#127793; 新手
+          </button>
+          <button
+            onClick={() => onOptionsChange({ ...options, skillLevel: 'advanced' })}
+            className={`flex-1 py-2 rounded-lg font-semibold transition-colors ${
+              options.skillLevel === 'advanced'
+                ? 'bg-blue-500 text-white'
+                : 'bg-gray-200 text-gray-500 hover:bg-gray-300'
+            }`}
+          >
+            &#127942; 進階
+          </button>
+        </div>
+        <p className="text-xs text-gray-400 mt-1">
+          {options.skillLevel === 'beginner' ? '評分標準較寬鬆，著重基本動作' : '評分標準嚴格，要求精確角度'}
+        </p>
+      </div>
+
       {/* Optional Features */}
       <div className="mb-4">
         <label className="text-sm font-semibold text-gray-600 mb-2 block">進階功能</label>

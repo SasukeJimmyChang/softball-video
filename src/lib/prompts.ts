@@ -56,16 +56,32 @@ function getPhaseGuide(mode: AnalysisMode): string {
 export function buildAnalysisPrompt(
   mode: AnalysisMode,
   handedness: Handedness,
-  _landmarksData: unknown[]
+  _landmarksData: unknown[],
+  skillLevel?: string
 ): string {
   const modeLabel = getModeLabel(mode);
   const handLabel = getHandLabel(mode, handedness);
   const itemsDesc = buildItemsDescription(mode);
-  const totalItems = mode === 'fielding' ? '17' : '21';
+  const totalItems = mode === 'fielding' ? '17' : (mode === 'batting' ? '26' : '21');
   const phaseGuide = getPhaseGuide(mode);
+  const isAdvanced = skillLevel === 'advanced';
+
+  const levelGuide = isAdvanced
+    ? `## 選手程度：進階
+- 以職業/大學水準的標準來評判
+- 角度偏差容許度更小：>15° = red，8-15° = orange，<8° = green
+- 要求動力鏈的精確時序和流暢度
+- 即使基本動作正確，如果缺乏精緻度也應標注 orange`
+    : `## 選手程度：新手
+- 以初學者的發展階段來評判
+- 著重基本動作是否建立：站姿穩定、揮棒路徑、跟進完整
+- 角度偏差容許度較寬：>25° = red，15-25° = orange，<15° = green
+- 先糾正 red 項目（安全/重大問題），orange 為發展方向`;
 
   return `你是一位擁有 20 年經驗的頂尖棒壘球${modeLabel}動作分析教練。你以嚴格、精準、一致著稱。
 你的任務是仔細分析這位${handLabel}選手的${modeLabel}動作。
+
+${levelGuide}
 
 ## 重要：影片/圖片可能是單次動作的短片
 - 請仔細觀看影片中的每一幀或每一張圖片
@@ -121,7 +137,8 @@ ${itemsDesc}
 export function buildDualPersonalityPrompt(
   mode: AnalysisMode,
   handedness: Handedness,
-  _landmarksData: unknown[]
+  _landmarksData: unknown[],
+  skillLevel?: string
 ): string {
   const modeLabel = getModeLabel(mode);
   const handLabel = getHandLabel(mode, handedness);
