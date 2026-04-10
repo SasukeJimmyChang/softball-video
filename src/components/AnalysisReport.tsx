@@ -1,12 +1,13 @@
 'use client';
 
-import { AnalysisResultItem, DualPersonalityReport, StatusColor } from '@/types';
+import { AnalysisMode, AnalysisResultItem, DualPersonalityReport, StatusColor } from '@/types';
 
 interface AnalysisReportProps {
   results: AnalysisResultItem[] | null;
   isAnalyzing: boolean;
   summary: string | null;
   dualPersonality: DualPersonalityReport | null;
+  mode: AnalysisMode;
 }
 
 const statusConfig: Record<StatusColor, { bg: string; border: string }> = {
@@ -37,19 +38,93 @@ function RatingBar({ value, color }: { value: number; color: string }) {
   );
 }
 
-function DualPersonalitySection({ report }: { report: DualPersonalityReport }) {
+function FieldingRatingTable({ ratings, color }: { ratings: NonNullable<DualPersonalityReport['encouragingCoach']['fieldingRatings']>; color: string }) {
+  const bgColor = color === 'green' ? 'bg-green-50' : 'bg-red-50';
+  const textColor = color === 'green' ? 'text-green-800' : 'text-red-800';
+  const borderColor = color === 'green' ? 'border-green-100' : 'border-red-100';
+  const barColor = color === 'green' ? 'bg-green-500' : 'bg-red-500';
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className={`${bgColor} ${textColor}`}>
+            <th className="p-2 text-left">選手</th>
+            <th className="p-2">反應</th>
+            <th className="p-2">手套</th>
+            <th className="p-2">腳步</th>
+            <th className="p-2">傳球</th>
+            <th className="p-2">穩定</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ratings.map((r, i) => (
+            <tr key={i} className={`border-t ${borderColor}`}>
+              <td className="p-2 font-semibold">{r.name}</td>
+              <td className="p-1"><RatingBar value={r.reaction} color={barColor} /></td>
+              <td className="p-1"><RatingBar value={r.gloveWork} color={barColor} /></td>
+              <td className="p-1"><RatingBar value={r.footwork} color={barColor} /></td>
+              <td className="p-1"><RatingBar value={r.throwing} color={barColor} /></td>
+              <td className="p-1"><RatingBar value={r.stability} color={barColor} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function BattingRatingTable({ ratings, color }: { ratings: DualPersonalityReport['encouragingCoach']['ratings']; color: string }) {
+  const bgColor = color === 'green' ? 'bg-green-50' : 'bg-red-50';
+  const textColor = color === 'green' ? 'text-green-800' : 'text-red-800';
+  const borderColor = color === 'green' ? 'border-green-100' : 'border-red-100';
+  const barColor = color === 'green' ? 'bg-green-500' : 'bg-red-500';
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className={`${bgColor} ${textColor}`}>
+            <th className="p-2 text-left">選手</th>
+            <th className="p-2">爆</th>
+            <th className="p-2">準</th>
+            <th className="p-2">穩</th>
+            <th className="p-2">協</th>
+            <th className="p-2">積極</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ratings.map((r, i) => (
+            <tr key={i} className={`border-t ${borderColor}`}>
+              <td className="p-2 font-semibold">{r.name}</td>
+              <td className="p-1"><RatingBar value={r.power} color={barColor} /></td>
+              <td className="p-1"><RatingBar value={r.accuracy} color={barColor} /></td>
+              <td className="p-1"><RatingBar value={r.stability} color={barColor} /></td>
+              <td className="p-1"><RatingBar value={r.coordination} color={barColor} /></td>
+              <td className="p-1"><RatingBar value={r.aggression} color={barColor} /></td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DualPersonalitySection({ report, mode }: { report: DualPersonalityReport; mode: AnalysisMode }) {
+  const isFielding = mode === 'fielding';
+
   return (
     <div className="space-y-6">
       {/* Encouraging Coach */}
       <div className="border-2 border-green-300 rounded-xl overflow-hidden">
         <div className="bg-green-600 px-4 py-3 text-white font-bold flex items-center gap-2">
           <span className="text-xl">&#128588;</span>
-          <span>一、鼓勵教練的溫馨統整報告</span>
+          <span>一、鼓勵教練的溫馨{isFielding ? '守備' : '統整'}報告</span>
         </div>
         <div className="p-4 space-y-4">
           {/* Strengths */}
           <div>
-            <h4 className="font-bold text-green-700 mb-2">&#127775; 球員優點與分析</h4>
+            <h4 className="font-bold text-green-700 mb-2">&#127775; {isFielding ? '守備優點分析' : '球員優點與分析'}</h4>
             <ul className="space-y-2">
               {report.encouragingCoach.strengths.map((s, i) => (
                 <li key={i} className="flex gap-2 text-sm bg-green-50 p-2 rounded-lg">
@@ -60,42 +135,32 @@ function DualPersonalitySection({ report }: { report: DualPersonalityReport }) {
             </ul>
           </div>
 
-          {/* Lineup */}
+          {/* Lineup or Position */}
           <div>
-            <h4 className="font-bold text-green-700 mb-2">&#9918; 教練版建議棒次</h4>
-            <p className="text-sm bg-green-50 p-3 rounded-lg">{report.encouragingCoach.suggestedLineup}</p>
+            {isFielding ? (
+              <>
+                <h4 className="font-bold text-green-700 mb-2">&#129354; 教練版建議守備位置</h4>
+                <p className="text-sm bg-green-50 p-3 rounded-lg">{report.encouragingCoach.suggestedPosition || '—'}</p>
+              </>
+            ) : (
+              <>
+                <h4 className="font-bold text-green-700 mb-2">&#9918; 教練版建議棒次</h4>
+                <p className="text-sm bg-green-50 p-3 rounded-lg">{report.encouragingCoach.suggestedLineup}</p>
+              </>
+            )}
           </div>
 
           {/* Ratings */}
-          {report.encouragingCoach.ratings.length > 0 && (
+          {isFielding && report.encouragingCoach.fieldingRatings && report.encouragingCoach.fieldingRatings.length > 0 && (
+            <div>
+              <h4 className="font-bold text-green-700 mb-2">&#128200; 教練版守備能力評分</h4>
+              <FieldingRatingTable ratings={report.encouragingCoach.fieldingRatings} color="green" />
+            </div>
+          )}
+          {!isFielding && report.encouragingCoach.ratings.length > 0 && (
             <div>
               <h4 className="font-bold text-green-700 mb-2">&#128200; 教練版能力評分</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-green-50 text-green-800">
-                      <th className="p-2 text-left">選手</th>
-                      <th className="p-2">爆</th>
-                      <th className="p-2">準</th>
-                      <th className="p-2">穩</th>
-                      <th className="p-2">協</th>
-                      <th className="p-2">積極</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.encouragingCoach.ratings.map((r, i) => (
-                      <tr key={i} className="border-t border-green-100">
-                        <td className="p-2 font-semibold">{r.name}</td>
-                        <td className="p-1"><RatingBar value={r.power} color="bg-green-500" /></td>
-                        <td className="p-1"><RatingBar value={r.accuracy} color="bg-green-500" /></td>
-                        <td className="p-1"><RatingBar value={r.stability} color="bg-green-500" /></td>
-                        <td className="p-1"><RatingBar value={r.coordination} color="bg-green-500" /></td>
-                        <td className="p-1"><RatingBar value={r.aggression} color="bg-green-500" /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <BattingRatingTable ratings={report.encouragingCoach.ratings} color="green" />
             </div>
           )}
 
@@ -112,12 +177,12 @@ function DualPersonalitySection({ report }: { report: DualPersonalityReport }) {
       <div className="border-2 border-red-300 rounded-xl overflow-hidden">
         <div className="bg-red-600 px-4 py-3 text-white font-bold flex items-center gap-2">
           <span className="text-xl">&#128520;</span>
-          <span>二、毒舌球探的殘酷實話報告</span>
+          <span>二、毒舌球探的殘酷{isFielding ? '守備' : '實話'}報告</span>
         </div>
         <div className="p-4 space-y-4">
           {/* Weaknesses */}
           <div>
-            <h4 className="font-bold text-red-700 mb-2">&#128163; 致命缺點分析</h4>
+            <h4 className="font-bold text-red-700 mb-2">&#128163; {isFielding ? '守備致命缺點' : '致命缺點分析'}</h4>
             <ul className="space-y-2">
               {report.harshScout.weaknesses.map((w, i) => (
                 <li key={i} className="flex gap-2 text-sm bg-red-50 p-2 rounded-lg">
@@ -128,42 +193,32 @@ function DualPersonalitySection({ report }: { report: DualPersonalityReport }) {
             </ul>
           </div>
 
-          {/* Lineup */}
+          {/* Lineup or Position */}
           <div>
-            <h4 className="font-bold text-red-700 mb-2">&#9918; 球探版建議棒次</h4>
-            <p className="text-sm bg-red-50 p-3 rounded-lg">{report.harshScout.suggestedLineup}</p>
+            {isFielding ? (
+              <>
+                <h4 className="font-bold text-red-700 mb-2">&#129354; 球探版建議守備位置</h4>
+                <p className="text-sm bg-red-50 p-3 rounded-lg">{report.harshScout.suggestedPosition || '—'}</p>
+              </>
+            ) : (
+              <>
+                <h4 className="font-bold text-red-700 mb-2">&#9918; 球探版建議棒次</h4>
+                <p className="text-sm bg-red-50 p-3 rounded-lg">{report.harshScout.suggestedLineup}</p>
+              </>
+            )}
           </div>
 
           {/* Ratings */}
-          {report.harshScout.ratings.length > 0 && (
+          {isFielding && report.harshScout.fieldingRatings && report.harshScout.fieldingRatings.length > 0 && (
+            <div>
+              <h4 className="font-bold text-red-700 mb-2">&#128200; 球探版守備能力評分</h4>
+              <FieldingRatingTable ratings={report.harshScout.fieldingRatings} color="red" />
+            </div>
+          )}
+          {!isFielding && report.harshScout.ratings.length > 0 && (
             <div>
               <h4 className="font-bold text-red-700 mb-2">&#128200; 球探版能力評分</h4>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-red-50 text-red-800">
-                      <th className="p-2 text-left">選手</th>
-                      <th className="p-2">爆</th>
-                      <th className="p-2">準</th>
-                      <th className="p-2">穩</th>
-                      <th className="p-2">協</th>
-                      <th className="p-2">積極</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.harshScout.ratings.map((r, i) => (
-                      <tr key={i} className="border-t border-red-100">
-                        <td className="p-2 font-semibold">{r.name}</td>
-                        <td className="p-1"><RatingBar value={r.power} color="bg-red-500" /></td>
-                        <td className="p-1"><RatingBar value={r.accuracy} color="bg-red-500" /></td>
-                        <td className="p-1"><RatingBar value={r.stability} color="bg-red-500" /></td>
-                        <td className="p-1"><RatingBar value={r.coordination} color="bg-red-500" /></td>
-                        <td className="p-1"><RatingBar value={r.aggression} color="bg-red-500" /></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <BattingRatingTable ratings={report.harshScout.ratings} color="red" />
             </div>
           )}
 
@@ -179,7 +234,7 @@ function DualPersonalitySection({ report }: { report: DualPersonalityReport }) {
   );
 }
 
-export default function AnalysisReport({ results, isAnalyzing, summary, dualPersonality }: AnalysisReportProps) {
+export default function AnalysisReport({ results, isAnalyzing, summary, dualPersonality, mode }: AnalysisReportProps) {
   const hasResults = results || dualPersonality;
 
   return (
@@ -236,7 +291,7 @@ export default function AnalysisReport({ results, isAnalyzing, summary, dualPers
                     <span>&#127917;</span> 雙人格教練分析
                   </h3>
                 </div>
-                <DualPersonalitySection report={dualPersonality} />
+                <DualPersonalitySection report={dualPersonality} mode={mode} />
               </>
             )}
           </div>

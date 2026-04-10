@@ -283,6 +283,7 @@ export default function Home() {
             isAnalyzing={isAnalyzing}
             summary={summary}
             dualPersonality={dualPersonality}
+            mode={mode}
           />
         </div>
       </div>

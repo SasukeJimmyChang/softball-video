@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { analyzeWithGemini } from '@/lib/gemini';
 import { buildAnalysisPrompt, buildDualPersonalityPrompt } from '@/lib/prompts';
-import { AnalysisMode, Handedness, SkillLevel, AnalysisResultItem, DualPersonalityReport } from '@/types';
+import { AnalysisMode, Handedness, SkillLevel, AnalysisResultItem, DualPersonalityReport, FieldingPlayerRating } from '@/types';
 
 export const maxDuration = 60;
 
@@ -30,31 +30,45 @@ export async function POST(request: NextRequest) {
       const dpText = await analyzeWithGemini({ prompt: dpPrompt, images });
       const dpParsed = parseJsonFromResponse(dpText);
 
+      const isFielding = mode === 'fielding';
+
+      function parseFieldingRatings(ratings: any[]): FieldingPlayerRating[] {
+        return (ratings || []).map((r: any) => ({
+          name: r.name || '選手',
+          reaction: r.reaction ?? 0,
+          gloveWork: r.gloveWork ?? 0,
+          footwork: r.footwork ?? 0,
+          throwing: r.throwing ?? 0,
+          stability: r.stability ?? 0,
+        }));
+      }
+
+      function parseBattingRatings(ratings: any[]) {
+        return (ratings || []).map((r: any) => ({
+          name: r.name || '選手',
+          power: r.power ?? 0,
+          accuracy: r.accuracy ?? 0,
+          stability: r.stability ?? 0,
+          coordination: r.coordination ?? 0,
+          aggression: r.aggression ?? 0,
+        }));
+      }
+
       const dp: DualPersonalityReport = {
         encouragingCoach: {
           strengths: dpParsed.encouragingCoach?.strengths || [],
-          suggestedLineup: dpParsed.encouragingCoach?.suggestedLineup || '',
-          ratings: (dpParsed.encouragingCoach?.ratings || []).map((r: any) => ({
-            name: r.name || '選手',
-            power: r.power ?? r.reaction ?? 0,
-            accuracy: r.accuracy ?? r.gloveWork ?? 0,
-            stability: r.stability ?? 0,
-            coordination: r.coordination ?? r.throwing ?? 0,
-            aggression: r.aggression ?? r.footwork ?? 0,
-          })),
+          suggestedLineup: isFielding ? '' : (dpParsed.encouragingCoach?.suggestedLineup || ''),
+          ...(isFielding ? { suggestedPosition: dpParsed.encouragingCoach?.suggestedPosition || '' } : {}),
+          ratings: isFielding ? [] : parseBattingRatings(dpParsed.encouragingCoach?.ratings),
+          ...(isFielding ? { fieldingRatings: parseFieldingRatings(dpParsed.encouragingCoach?.ratings) } : {}),
           ...(dpParsed.encouragingCoach?.encouragement ? { encouragement: dpParsed.encouragingCoach.encouragement } : {}),
         },
         harshScout: {
           weaknesses: dpParsed.harshScout?.weaknesses || [],
-          suggestedLineup: dpParsed.harshScout?.suggestedLineup || '',
-          ratings: (dpParsed.harshScout?.ratings || []).map((r: any) => ({
-            name: r.name || '選手',
-            power: r.power ?? r.reaction ?? 0,
-            accuracy: r.accuracy ?? r.gloveWork ?? 0,
-            stability: r.stability ?? 0,
-            coordination: r.coordination ?? r.throwing ?? 0,
-            aggression: r.aggression ?? r.footwork ?? 0,
-          })),
+          suggestedLineup: isFielding ? '' : (dpParsed.harshScout?.suggestedLineup || ''),
+          ...(isFielding ? { suggestedPosition: dpParsed.harshScout?.suggestedPosition || '' } : {}),
+          ratings: isFielding ? [] : parseBattingRatings(dpParsed.harshScout?.ratings),
+          ...(isFielding ? { fieldingRatings: parseFieldingRatings(dpParsed.harshScout?.ratings) } : {}),
           ...(dpParsed.harshScout?.roast ? { roast: dpParsed.harshScout.roast } : {}),
         },
       };
