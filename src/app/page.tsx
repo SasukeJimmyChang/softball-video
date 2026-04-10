@@ -16,6 +16,30 @@ function readFileAsBase64(file: File): Promise<string> {
 }
 
 /**
+ * Wait for video metadata to be ready (needed on iOS).
+ */
+async function waitForVideoReady(videoEl: HTMLVideoElement, timeoutMs = 5000): Promise<boolean> {
+  if (videoEl.readyState >= 2) return true;
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(videoEl.readyState >= 1), timeoutMs);
+    const onReady = () => {
+      clearTimeout(timer);
+      videoEl.removeEventListener('loadeddata', onReady);
+      videoEl.removeEventListener('canplay', onReady);
+      resolve(true);
+    };
+    videoEl.addEventListener('loadeddata', onReady);
+    videoEl.addEventListener('canplay', onReady);
+    // iOS sometimes needs a play() trigger to load metadata
+    if (videoEl.readyState < 1) {
+      videoEl.muted = true;
+      videoEl.playsInline = true;
+      videoEl.play().then(() => videoEl.pause()).catch(() => {});
+    }
+  });
+}
+
+/**
  * Capture high-quality frames via seek (desktop) or play (iOS fallback).
  */
 async function captureFrames(videoEl: HTMLVideoElement, maxFrames: number): Promise<string[]> {
@@ -111,10 +135,10 @@ export default function Home() {
     setLandmarks(null);
 
     const sizeMB = file.size / (1024 * 1024);
-    if (sizeMB > 10) {
-      setStatusMessage(`影片 ${sizeMB.toFixed(0)}MB 較大，建議裁剪為單次揮擊短片（2-10 秒）以提高分析精度。`);
+    if (sizeMB > 3) {
+      setStatusMessage(`影片 ${sizeMB.toFixed(1)}MB 較大，建議裁剪至 3MB 以下（2-5 秒短片）。大檔請先播放幾秒再按分析。`);
     } else {
-      setStatusMessage('影片已載入！建議先播放確認後再點「開始分析」。');
+      setStatusMessage('影片已載入！點「開始分析」即可。');
     }
     setStatusType('ready');
   }, []);
@@ -136,21 +160,27 @@ export default function Home() {
     try {
       // Strategy: small files → send video directly (most accurate)
       //           large files → try extract frames, fallback to direct upload
-      if (fileSizeMB <= 3.5) {
+      // Vercel body limit ~4.5MB; base64 adds ~33%; max raw file for direct upload ~3MB
+      const DIRECT_UPLOAD_MAX_MB = 3;
+
+      if (fileSizeMB <= DIRECT_UPLOAD_MAX_MB) {
         setStatusMessage('正在讀取影片...(影片直傳模式，分析最精準)');
         const base64 = await readFileAsBase64(videoFile);
         images = [base64];
         uploadMode = 'video';
       } else {
-        // Large file: try frame extraction first
+        // Large file: extract frames (wait for video metadata on iOS)
         setStatusMessage('正在從影片擷取關鍵幀...');
         const videoEl = videoPlayerRef.current?.getVideoElement();
-        if (videoEl && videoEl.readyState >= 1) {
-          images = await captureFrames(videoEl, 8);
+        if (videoEl) {
+          await waitForVideoReady(videoEl);
+          if (videoEl.readyState >= 1) {
+            images = await captureFrames(videoEl, 8);
+          }
         }
 
-        // Fallback: if frame capture failed (common on iOS), send video directly
-        if (images.length === 0 && fileSizeMB <= 20) {
+        // Fallback: only if file small enough for Vercel's body limit
+        if (images.length === 0 && fileSizeMB <= DIRECT_UPLOAD_MAX_MB) {
           setStatusMessage('擷取幀失敗，改用影片直傳模式...');
           const base64 = await readFileAsBase64(videoFile);
           images = [base64];
@@ -161,8 +191,9 @@ export default function Home() {
       if (images.length === 0) {
         throw new Error(
           '無法處理影片。建議：\n' +
-          '1. 裁剪為單次揮擊短片（2-10 秒，<20MB）\n' +
-          '2. 使用 MP4 格式'
+          '1. 裁剪為 2-10 秒的短片（<3MB 最佳）\n' +
+          '2. 上傳後先播放幾秒再按分析\n' +
+          '3. 使用 MP4 格式'
         );
       }
 
