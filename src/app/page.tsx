@@ -135,28 +135,34 @@ export default function Home() {
 
     try {
       // Strategy: small files → send video directly (most accurate)
-      //           large files → extract frames
+      //           large files → try extract frames, fallback to direct upload
       if (fileSizeMB <= 3.5) {
-        // Small file: send entire video to Gemini (best quality, full motion)
         setStatusMessage('正在讀取影片...(影片直傳模式，分析最精準)');
         const base64 = await readFileAsBase64(videoFile);
         images = [base64];
         uploadMode = 'video';
       } else {
-        // Large file: extract frames
-        setStatusMessage('正在從影片擷取關鍵幀...(建議播放過影片再分析)');
+        // Large file: try frame extraction first
+        setStatusMessage('正在從影片擷取關鍵幀...');
         const videoEl = videoPlayerRef.current?.getVideoElement();
         if (videoEl && videoEl.readyState >= 1) {
           images = await captureFrames(videoEl, 8);
+        }
+
+        // Fallback: if frame capture failed (common on iOS), send video directly
+        if (images.length === 0 && fileSizeMB <= 20) {
+          setStatusMessage('擷取幀失敗，改用影片直傳模式...');
+          const base64 = await readFileAsBase64(videoFile);
+          images = [base64];
+          uploadMode = 'video';
         }
       }
 
       if (images.length === 0) {
         throw new Error(
           '無法處理影片。建議：\n' +
-          '1. 裁剪為單次揮擊短片（2-10 秒，<10MB）\n' +
-          '2. 上傳後先播放幾秒再分析\n' +
-          '3. 使用 MP4 格式'
+          '1. 裁剪為單次揮擊短片（2-10 秒，<20MB）\n' +
+          '2. 使用 MP4 格式'
         );
       }
 
